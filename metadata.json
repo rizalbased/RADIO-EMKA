@@ -1,0 +1,8 @@
+{
+  "name": "Remix RADIO EMKA",
+  "description": "Aplikasi request lagu dan confess pesan estetik khas Gen Z yang terintegrasi langsung dengan Google Sheets. by rizal app ",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

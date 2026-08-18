@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    // Requests collection: Public can submit requests and read the queue in real-time
+    match /requests/{requestId} {
+      allow read: if true;
+      allow create: if isValidId(requestId)
+        && request.resource.data.studentName is string
+        && request.resource.data.songTitle is string
+        && request.resource.data.artist is string;
+      allow update: if isValidId(requestId);
+      allow delete: if isValidId(requestId);
+    }
+
+    // Radio live state document & settings: Accessible for real-time listener broadcasts & DJ controls
+    match /radio/{docId} {
+      allow read: if true;
+      allow write: if isValidId(docId);
+    }
+
+    // Default safety catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

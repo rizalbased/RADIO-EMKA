@@ -1,0 +1,16 @@
+<resources>
+    <!-- Base application theme -->
+    <style name="Theme.EmkaRadio" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/pink_primary</item>
+        <item name="colorPrimaryVariant">@color/purple_primary</item>
+        <item name="colorSecondary">@color/cyan_accent</item>
+        <item name="android:statusBarColor">@color/bg_dark</item>
+        <item name="android:navigationBarColor">@color/bg_dark</item>
+        <item name="android:windowBackground">@color/bg_dark</item>
+    </style>
+
+    <!-- Splash Screen theme -->
+    <style name="Theme.EmkaRadio.Splash" parent="Theme.EmkaRadio">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+</resources>

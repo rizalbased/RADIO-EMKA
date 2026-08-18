@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "SongRequest": {
+      "title": "SongRequest",
+      "description": "Student song request and confession message for EMKA Radio broadcast",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique request ID" },
+        "studentName": { "type": "string", "maxLength": 100, "description": "Student sender name" },
+        "className": { "type": "string", "maxLength": 50, "description": "Class or grade level" },
+        "songTitle": { "type": "string", "maxLength": 150, "description": "Title of the song" },
+        "artist": { "type": "string", "maxLength": 150, "description": "Artist or performer" },
+        "targetPerson": { "type": "string", "maxLength": 100, "description": "Target recipient of confession" },
+        "message": { "type": "string", "maxLength": 500, "description": "Confession message or greetings" },
+        "mood": { "type": "string", "maxLength": 50, "description": "Selected mood tag" },
+        "coverUrl": { "type": "string", "description": "Album artwork URL" },
+        "previewUrl": { "type": "string", "description": "Audio preview URL" },
+        "status": { "type": "string", "enum": ["Queued", "Playing", "Played"], "description": "Current playback status" },
+        "likes": { "type": "number", "description": "Count of likes received" },
+        "youtubeVideoId": { "type": "string", "maxLength": 50, "description": "Resolved YouTube Video ID" },
+        "timestamp": { "type": "string", "description": "ISO date string when request was made" },
+        "createdAt": { "type": "number", "description": "Server timestamp for FIFO queue sorting" }
+      },
+      "required": ["id", "studentName", "songTitle", "artist", "status"]
+    },
+    "LiveRadioState": {
+      "title": "LiveRadioState",
+      "description": "Real-time state of the live radio playback broadcast",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string", "description": "Current YouTube video ID playing" },
+        "trackId": { "type": "string", "description": "Current active track ID" },
+        "songTitle": { "type": "string", "description": "Currently playing song title" },
+        "artist": { "type": "string", "description": "Currently playing artist" },
+        "artworkUrl": { "type": "string", "description": "Artwork URL for current song" },
+        "status": { "type": "string", "enum": ["IDLE", "PLAYING", "PAUSED", "STOPPED"], "description": "Radio playback status" },
+        "position": { "type": "number", "description": "Current playback position in seconds" },
+        "updatedAt": { "type": "number", "description": "Timestamp of last position update" },
+        "queueIndex": { "type": "number", "description": "Current index in the queue" },
+        "sequence": { "type": "number", "description": "Incrementing sequence number for ordering" }
+      },
+      "required": ["status", "updatedAt"]
+    },
+    "RadioSettings": {
+      "title": "RadioSettings",
+      "description": "Station host profiles and global configuration",
+      "type": "object",
+      "properties": {
+        "hosts": { "type": "array", "description": "List of active DJ hosts" },
+        "sheetConfig": { "type": "object", "description": "Google Sheet synchronization settings" },
+        "updatedAt": { "type": "number", "description": "Last settings update time" }
+      }
+    }
+  },
+  "firestore": {
+    "/requests/{requestId}": {
+      "schema": "SongRequest",
+      "description": "Collection of student song requests and queue"
+    },
+    "/radio/live": {
+      "schema": "LiveRadioState",
+      "description": "Singleton document holding the real-time broadcast playback state"
+    },
+    "/radio/settings": {
+      "schema": "RadioSettings",
+      "description": "Station DJ profiles and configuration document"
+    }
+  }
+}

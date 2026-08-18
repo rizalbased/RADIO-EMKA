@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EMKA RADIO - Radiomu Multi Karya</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400..900&family=Inter:wght@400..900&family=JetBrains+Mono:wght@400..700&display=swap" rel="stylesheet">
+    <script>
+      // Single Page Application redirect for GitHub Pages
+      (function() {
+        var path = window.location.pathname;
+        var search = window.location.search;
+        var hash = window.location.hash;
+        if (path && path !== '/') {
+          window.location.replace('/' + (search ? search : '') + (hash ? hash : ''));
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-[#F5F5F0] text-[#0B0B0B] antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
