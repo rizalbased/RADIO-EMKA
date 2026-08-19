@@ -1,4 +1,15 @@
 import { SheetConfig, SongRequest, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult } from '../types';
+import {
+  fetchSongRequestsFromDb,
+  subscribeToSongRequests,
+  insertSongRequest,
+  updateDbRequestStatus,
+  deleteDbSongRequest,
+  clearAllDbSongRequests,
+  likeDbSongRequest,
+  updateDbRequestVideoId
+} from './supabaseService';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
 
 // LocalStorage Keys for resilient offline/cached data
 const STORAGE_KEYS = {
@@ -172,16 +183,77 @@ export async function connectGoogleSheet(payload: { spreadsheetId?: string; spre
 }
 
 // -------------------------------------------------------------
-// 3. SONG REQUESTS & FIFO QUEUE (STRICT SINGLE QUEUE INSERT & DEDUPLICATION)
+// 3. SONG REQUESTS & FIFO QUEUE (SUPABASE SINGLE SOURCE OF TRUTH)
 // -------------------------------------------------------------
 
 export async function fetchSongRequests(): Promise<{ requests: SongRequest[]; synced: boolean }> {
+  if (isSupabaseConfigured()) {
+    const { requests, isSupabase } = await fetchSongRequestsFromDb();
+    if (isSupabase && requests) {
+      saveLocalRequests(requests);
+      return { requests, synced: true };
+    }
+  }
   return { requests: getLocalRequests(), synced: false };
 }
 
 export function subscribeSongRequests(onUpdate: (requests: SongRequest[]) => void): () => void {
+  // Always emit current local/cached requests initially
   onUpdate(getLocalRequests());
 
+  if (isSupabaseConfigured()) {
+    console.log('[API] Subscribing to Supabase Realtime song_requests channel...');
+    const unsubscribeSupabase = subscribeToSongRequests({
+      onInsert: (newReq) => {
+        const current = getLocalRequests();
+        const exists = current.some((r) => r.id === newReq.id);
+        if (!exists) {
+          const updated = [...current, newReq];
+          saveLocalRequests(updated);
+          onUpdate(updated);
+          window.dispatchEvent(new Event('storage'));
+        }
+      },
+      onUpdate: (updatedReq) => {
+        const current = getLocalRequests();
+        const idx = current.findIndex((r) => r.id === updatedReq.id);
+        let updated: SongRequest[];
+        if (idx !== -1) {
+          updated = [...current];
+          updated[idx] = updatedReq;
+        } else {
+          updated = [...current, updatedReq];
+        }
+        saveLocalRequests(updated);
+        onUpdate(updated);
+        window.dispatchEvent(new Event('storage'));
+      },
+      onDelete: (deletedId) => {
+        const current = getLocalRequests();
+        const updated = current.filter((r) => r.id !== deletedId);
+        saveLocalRequests(updated);
+        onUpdate(updated);
+        window.dispatchEvent(new Event('storage'));
+      },
+      onSyncAll: (allReqs) => {
+        saveLocalRequests(allReqs);
+        onUpdate(allReqs);
+        window.dispatchEvent(new Event('storage'));
+      }
+    });
+
+    const storageListener = () => {
+      onUpdate(getLocalRequests());
+    };
+    window.addEventListener('storage', storageListener);
+
+    return () => {
+      unsubscribeSupabase();
+      window.removeEventListener('storage', storageListener);
+    };
+  }
+
+  // Fallback: LocalStorage event listener
   const listener = () => {
     onUpdate(getLocalRequests());
   };
@@ -202,11 +274,33 @@ export async function submitSongRequest(data: {
   previewUrl?: string;
   youtubeVideoId?: string;
 }): Promise<{ success: boolean; request?: SongRequest; requests: SongRequest[]; error?: string }> {
+  console.log(`[REQUEST] submit title="${data.songTitle.trim()}" artist="${data.artist.trim()}"`);
+
+  if (isSupabaseConfigured()) {
+    const result = await insertSongRequest(data);
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Gagal mengirim request lagu.',
+        requests: getLocalRequests()
+      };
+    }
+
+    if (result.request) {
+      const current = getLocalRequests();
+      if (!current.some((r) => r.id === result.request!.id)) {
+        current.push(result.request);
+        saveLocalRequests(current);
+        window.dispatchEvent(new Event('storage'));
+      }
+      return { success: true, request: result.request, requests: current };
+    }
+  }
+
+  // Fallback if Supabase is not configured yet
   const normTitle = data.songTitle.trim().toLowerCase();
   const normArtist = data.artist.trim().toLowerCase();
   const cleanVideoId = data.youtubeVideoId && data.youtubeVideoId.trim().length === 11 ? data.youtubeVideoId.trim() : null;
-
-  console.log(`[REQUEST] submit title="${data.songTitle.trim()}" artist="${data.artist.trim()}"`);
 
   const current = getLocalRequests();
 
@@ -278,6 +372,10 @@ export async function submitSongRequest(data: {
 }
 
 export async function updateRequestStatus(requestId: string, status: 'Queued' | 'Playing' | 'Played'): Promise<{ success: boolean; requests: SongRequest[] }> {
+  if (isSupabaseConfigured()) {
+    await updateDbRequestStatus(requestId, status);
+  }
+
   const current = getLocalRequests();
   if (status === 'Playing') {
     current.forEach((r) => {
@@ -295,6 +393,10 @@ export async function updateRequestStatus(requestId: string, status: 'Queued' | 
 }
 
 export async function updateRequestYoutubeVideoId(requestId: string, youtubeVideoId: string): Promise<{ success: boolean; requests: SongRequest[] }> {
+  if (isSupabaseConfigured()) {
+    await updateDbRequestVideoId(requestId, youtubeVideoId);
+  }
+
   const current = getLocalRequests();
   const idx = current.findIndex(r => r.id === requestId);
   if (idx !== -1) {
@@ -377,6 +479,18 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
 }
 
 export async function likeRequest(requestId: string): Promise<{ success: boolean; likes: number }> {
+  if (isSupabaseConfigured()) {
+    const res = await likeDbSongRequest(requestId);
+    if (res.success) {
+      const current = getLocalRequests();
+      const item = current.find(r => r.id === requestId);
+      if (item) item.likes = res.newLikes;
+      saveLocalRequests(current);
+      window.dispatchEvent(new Event('storage'));
+      return { success: true, likes: res.newLikes };
+    }
+  }
+
   const current = getLocalRequests();
   const item = current.find(r => r.id === requestId);
   let newLikes = 1;
@@ -390,6 +504,10 @@ export async function likeRequest(requestId: string): Promise<{ success: boolean
 }
 
 export async function deleteSongRequest(requestId: string): Promise<{ success: boolean; requests: SongRequest[] }> {
+  if (isSupabaseConfigured()) {
+    await deleteDbSongRequest(requestId);
+  }
+
   const current = getLocalRequests().filter(r => r.id !== requestId);
   saveLocalRequests(current);
   window.dispatchEvent(new Event('storage'));
@@ -397,6 +515,10 @@ export async function deleteSongRequest(requestId: string): Promise<{ success: b
 }
 
 export async function clearAllSongRequests(): Promise<{ success: boolean; requests: SongRequest[] }> {
+  if (isSupabaseConfigured()) {
+    await clearAllDbSongRequests();
+  }
+
   saveLocalRequests([]);
   window.dispatchEvent(new Event('storage'));
   return { success: true, requests: [] };
