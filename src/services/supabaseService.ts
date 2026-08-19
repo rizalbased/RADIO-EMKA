@@ -503,7 +503,7 @@ export async function insertSongRequest(data: {
       }
     } catch {}
 
-    // 6. Direct INSERT into public.song_requests with exact database mapping
+    // 6. Direct INSERT into public.song_requests with exact database mapping matching existing columns
     const insertPayload: any = {
       user_id: currentUser.id,
       video_id: cleanVideoId,
@@ -512,9 +512,6 @@ export async function insertSongRequest(data: {
       thumbnail_url: data.coverUrl || (cleanVideoId ? `https://i.ytimg.com/vi/${cleanVideoId}/hqdefault.jpg` : null),
       requester_name: data.studentName.trim(),
       class_name: data.className ? data.className.trim() : null,
-      target_person: data.targetPerson ? data.targetPerson.trim() : null,
-      message: data.message ? data.message.trim() : null,
-      mood: data.mood || null,
       status: 'pending'
     };
 
