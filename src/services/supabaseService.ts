@@ -431,7 +431,7 @@ export async function insertSongRequest(data: {
   const normArtist = data.artist.trim();
   const cleanVideoId = data.youtubeVideoId && data.youtubeVideoId.trim().length === 11 ? data.youtubeVideoId.trim() : (data.youtubeVideoId?.trim() || '');
 
-  console.log('[REQUEST] submit started');
+  console.log('[EMKA REQUEST]\nINSERT START');
 
   try {
     // 1. Get user via Supabase Auth
@@ -459,16 +459,11 @@ export async function insertSongRequest(data: {
         if (typeof client.auth.signInAnonymously === 'function') {
           const { error: anonErr } = await client.auth.signInAnonymously();
           if (anonErr) {
-            console.error('[REQUEST SUPABASE ERROR]', {
-              code: anonErr.code,
-              message: anonErr.message,
-              details: (anonErr as any).details,
-              hint: (anonErr as any).hint
-            });
+            console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: ${anonErr.code}\nmessage: ${anonErr.message}\ndetails: ${(anonErr as any).details || null}\nhint: ${(anonErr as any).hint || null}`);
           }
         }
       } catch (err: any) {
-        console.error('[REQUEST SUPABASE ERROR]', { message: err?.message });
+        console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: EXCEPTION\nmessage: ${err?.message || 'Anon auth exception'}`);
       }
 
       // Re-fetch user
@@ -482,20 +477,9 @@ export async function insertSongRequest(data: {
 
     // 4. If currentUser is still not available, FAIL the request
     if (!currentUser || !currentUser.id) {
-      console.error('[REQUEST SUPABASE ERROR]', {
-        message: 'Gagal mendapatkan currentUser.id dari Supabase Auth'
-      });
-      console.log('[REQUEST] INSERT ERROR', {
-        message: 'Current user session missing'
-      });
+      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: NO_USER\nmessage: Gagal mendapatkan currentUser.id dari Supabase Auth\ndetails: null\nhint: null`);
       return { success: false, error: 'Request gagal: Sesi pengguna Supabase tidak valid.' };
     }
-
-    // Debug logging as specified in Section 6
-    console.log(`[REQUEST] Supabase session:\n${Boolean(currentUser)}`);
-    console.log(`[REQUEST] user id:\n${currentUser.id}`);
-    console.log(`[REQUEST] video id:\n${cleanVideoId || 'none'}`);
-    console.log('[REQUEST] inserting into:\npublic.song_requests');
 
     // 5. Pre-check duplicate validation against 'pending' and 'playing'
     try {
@@ -514,7 +498,7 @@ export async function insertSongRequest(data: {
       if (existingRows && existingRows.length > 0) {
         const isPlaying = existingRows.some(r => r.status === 'playing');
         const errorMsg = isPlaying ? 'Lagu sedang diputar.' : 'Lagu tersebut sudah ada di antrean.';
-        console.warn(`[REQUEST] Duplicate rejected: ${errorMsg}`);
+        console.warn(`[EMKA REQUEST] Duplicate rejected: ${errorMsg}`);
         return { success: false, error: errorMsg };
       }
     } catch {}
@@ -541,7 +525,7 @@ export async function insertSongRequest(data: {
       .single();
 
     if (insertErr) {
-      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: ${insertErr.code}\nmessage: ${insertErr.message}\ndetails: ${(insertErr as any).details || null}\nhint: ${(insertErr as any).hint || null}`);
+      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: ${insertErr.code}\nmessage: ${insertErr.message}\ndetails: ${(insertErr as any).details || null}\nhint: ${(insertErr as any).hint || null}`);
 
       // Handle duplicate error from unique constraint/index
       if (
@@ -559,11 +543,11 @@ export async function insertSongRequest(data: {
     }
 
     if (!inserted || !inserted.id) {
-      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: NO_ID\nmessage: Database did not return inserted record\ndetails: null\nhint: null`);
+      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: NO_ID\nmessage: Database did not return inserted record\ndetails: null\nhint: null`);
       return { success: false, error: 'Request gagal dikirim ke server.' };
     }
 
-    console.log(`[EMKA REQUEST]\nDATABASE INSERT SUCCESS\nrequest id: ${inserted.id}`);
+    console.log(`[EMKA REQUEST]\nINSERT SUCCESS\nid: ${inserted.id}`);
 
     // Step 5: Database Verification - Immediately SELECT back
     const { data: verified, error: verifyErr } = await client
@@ -573,14 +557,14 @@ export async function insertSongRequest(data: {
       .single();
 
     if (verifyErr || !verified) {
-      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: ${verifyErr?.code || 'VERIFICATION_FAILED'}\nmessage: ${verifyErr?.message || 'Data tidak ditemukan setelah insert'}\ndetails: ${(verifyErr as any)?.details || null}\nhint: ${(verifyErr as any)?.hint || null}`);
+      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: ${verifyErr?.code || 'VERIFICATION_FAILED'}\nmessage: ${verifyErr?.message || 'Data tidak ditemukan setelah insert'}\ndetails: ${(verifyErr as any)?.details || null}\nhint: ${(verifyErr as any)?.hint || null}`);
       return { success: false, error: 'Request gagal: Verifikasi database tidak menemukan data lagu.' };
     }
 
     const mapped = mapDbRequestToSongRequest(verified as DbSongRequest);
     return { success: true, request: mapped };
   } catch (err: any) {
-    console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: EXCEPTION\nmessage: ${err?.message || 'Unexpected exception during insert'}\ndetails: null\nhint: null`);
+    console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: EXCEPTION\nmessage: ${err?.message || 'Unexpected exception during insert'}\ndetails: null\nhint: null`);
     return { success: false, error: 'Request gagal dikirim ke server.' };
   }
 }

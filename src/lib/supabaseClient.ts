@@ -45,8 +45,9 @@ export function isSupabaseConfigured(): boolean {
 
 export function printEmkaDiagnostic(): void {
   if (typeof window === 'undefined') return;
-  const configured = isSupabaseConfigured();
-  console.log('[EMKA DIAGNOSTIC]\nSupabase URL configured:', configured, '\nSupabase client:', configured ? 'initialized' : 'not initialized', '\nCurrent origin:', window.location.origin);
+  const urlConfigured = Boolean(supabaseUrl && supabaseUrl.startsWith('http'));
+  const keyConfigured = Boolean(supabaseAnonKey && supabaseAnonKey.length > 10);
+  console.log(`[EMKA SUPABASE]\nURL configured: ${urlConfigured}\nKEY configured: ${keyConfigured}`);
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
@@ -76,7 +77,7 @@ export function getSupabaseClient(): SupabaseClient | null {
 
 /**
  * Ensures a single anonymous session per browser/user.
- * Logs [EMKA AUTH] authenticated, anonymous, user id.
+ * Logs [EMKA AUTH] session, user, anonymous.
  */
 export async function ensureAnonymousSession(): Promise<string | null> {
   const client = getSupabaseClient();
@@ -89,24 +90,23 @@ export async function ensureAnonymousSession(): Promise<string | null> {
   anonymousAuthPromise = (async () => {
     try {
       // 1. Check existing session
-      const { data: sessionData, error: sessionErr } = await client.auth.getSession();
-      if (!sessionErr && !sessionData?.session) {
-        // Sign in anonymously if no session exists
+      const { data: sessionData } = await client.auth.getSession();
+      if (!sessionData?.session) {
         if (typeof client.auth.signInAnonymously === 'function') {
           await client.auth.signInAnonymously();
         }
       }
 
-      // 2. Retrieve user
+      // 2. Retrieve session and user status
+      const { data: latestSessionData } = await client.auth.getSession();
+      const sessionExists = Boolean(latestSessionData?.session);
       const { data: userData } = await client.auth.getUser();
-      const user = userData?.user;
-      const isAuthenticated = Boolean(user?.id);
-      const isAnon = Boolean(user?.is_anonymous);
-      const userId = user?.id || 'none';
+      const userExists = Boolean(userData?.user);
+      const isAnon = Boolean(userData?.user?.is_anonymous);
 
-      console.log(`[EMKA AUTH]\nauthenticated: ${isAuthenticated}\nanonymous: ${isAnon}\nuser id: ${userId}`);
+      console.log(`[EMKA AUTH]\nsession: ${sessionExists}\nuser: ${userExists}\nanonymous: ${isAnon}`);
 
-      return user?.id || null;
+      return userData?.user?.id || null;
     } catch (err: any) {
       console.warn('[EMKA AUTH] Exception:', err?.message || err);
       return null;
