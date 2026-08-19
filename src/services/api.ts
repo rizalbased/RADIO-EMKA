@@ -357,67 +357,46 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
   if (!query || !query.trim()) return [];
   const cleanQ = query.trim();
 
-  // Try server proxy first
-  try {
-    const res = await fetch(`/api/youtube/search?q=${encodeURIComponent(cleanQ)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-        return data.items
-          .map((item: any) => {
-            const rawId = item.id?.videoId || item.videoId;
-            const validId = typeof rawId === 'string' && rawId.trim().length === 11 ? rawId.trim() : null;
-            if (!validId) return null;
-            return {
-              videoId: validId,
-              title: item.snippet?.title || item.title || '',
-              channelTitle: item.snippet?.channelTitle || item.channelTitle || item.artist || '',
-              thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.medium?.url || item.thumbnail || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`
-            };
-          })
-          .filter(Boolean) as YouTubeSearchResult[];
-      }
-      if (data.videoId && typeof data.videoId === 'string' && data.videoId.trim().length === 11) {
-        const validId = data.videoId.trim();
-        return [{
-          videoId: validId,
-          title: data.title || cleanQ,
-          channelTitle: data.channelTitle || data.artist || '',
-          thumbnail: data.thumbnail || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`
-        }];
-      }
-    }
-  } catch (e) {
-    console.warn('[YouTube API] Server proxy search error, attempting client fallback:', e);
+  const apiKey = (import.meta as any).env?.VITE_YOUTUBE_API_KEY;
+  if (!apiKey) {
+    console.warn('[YouTube API] VITE_YOUTUBE_API_KEY is not configured');
+    return [];
   }
 
-  // Client-side fallback if VITE_YOUTUBE_API_KEY is available
-  const apiKey = (import.meta as any).env?.VITE_YOUTUBE_API_KEY;
-  if (apiKey) {
-    try {
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=6&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.items && Array.isArray(data.items)) {
-          return data.items
-            .map((item: any) => {
-              const rawId = item.id?.videoId;
-              const validId = typeof rawId === 'string' && rawId.trim().length === 11 ? rawId.trim() : null;
-              if (!validId) return null;
-              return {
-                videoId: validId,
-                title: item.snippet?.title || '',
-                channelTitle: item.snippet?.channelTitle || '',
-                thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`
-              };
-            })
-            .filter(Boolean) as YouTubeSearchResult[];
-        }
+  try {
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 400) {
+        console.error('[YouTube API Error 400] Bad request or invalid API key.');
+      } else if (res.status === 403) {
+        console.error('[YouTube API Error 403] Quota exceeded or API key restricted/unauthorized.');
+      } else if (res.status === 429) {
+        console.error('[YouTube API Error 429] Rate limit exceeded.');
+      } else {
+        console.error(`[YouTube API Error ${res.status}] Failed to search videos.`);
       }
-    } catch (err) {
-      console.warn('[YouTube API] Direct client search error:', err);
+      return [];
     }
+
+    const data = await res.json();
+    if (data.items && Array.isArray(data.items)) {
+      return data.items
+        .map((item: any) => {
+          const rawId = item.id?.videoId;
+          const validId = typeof rawId === 'string' && rawId.trim().length === 11 ? rawId.trim() : null;
+          if (!validId) return null;
+          return {
+            videoId: validId,
+            title: item.snippet?.title || '',
+            channelTitle: item.snippet?.channelTitle || '',
+            thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`
+          };
+        })
+        .filter(Boolean) as YouTubeSearchResult[];
+    }
+  } catch (err) {
+    console.warn('[YouTube API] Direct client search exception:', err);
   }
 
   return [];
