@@ -9,6 +9,7 @@ export interface PlayerController {
   setMuted: (muted: boolean) => void;
   getCurrentTime: () => number;
   getDuration: () => number;
+  getVideoData: () => any;
 }
 
 interface YouTubeRadioPlayerProps {
@@ -205,6 +206,12 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           return playerRef.current.getDuration();
         }
         return 0;
+      },
+      getVideoData: () => {
+        if (playerRef.current && readyRef.current && typeof playerRef.current.getVideoData === 'function') {
+          return playerRef.current.getVideoData();
+        }
+        return null;
       }
     };
 

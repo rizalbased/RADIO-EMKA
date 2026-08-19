@@ -421,6 +421,23 @@ export const RadioEngineProvider: React.FC<{
           if (dur > 0) setYtDuration(dur);
           const cur = playerControllerRef.current.getCurrentTime();
           setYtCurrentTime(cur);
+
+          const vData = playerControllerRef.current.getVideoData();
+          if (vData && vData.video_id) {
+            const currentVid = vData.video_id;
+            setActiveTrackMetadata(prev => ({
+              videoId: currentVid,
+              title: vData.title || prev?.title || playingTrackRef.current?.songTitle || 'YouTube Video',
+              channelTitle: vData.author || prev?.channelTitle || playingTrackRef.current?.artist || 'YouTube Channel',
+              thumbnail: `https://img.youtube.com/vi/${currentVid}/hqdefault.jpg`,
+              duration: dur,
+              currentTime: cur,
+              studentName: prev?.studentName || playingTrackRef.current?.studentName,
+              className: prev?.className || playingTrackRef.current?.className,
+              targetPerson: prev?.targetPerson || playingTrackRef.current?.targetPerson,
+              mood: prev?.mood || playingTrackRef.current?.mood
+            }));
+          }
         }
         break;
       case 2: // PAUSED
