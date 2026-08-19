@@ -161,7 +161,7 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
         youtubeVideoId
       });
 
-      setSuccessMessage('🎉 Request lagu & confession kamu berhasil terkirim dan tersimpan di antrean FIFO!');
+      setSuccessMessage('🎉 Request lagu berhasil dikirim.');
       
       // Reset form
       setStudentName('');
@@ -178,7 +178,7 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (err: any) {
-      setFormError(err.message || 'Gagal mengirim request');
+      setFormError(err.message || 'Request gagal dikirim ke server.');
     }
   };
 

@@ -209,13 +209,13 @@ export default function App() {
     setIsSubmitting(true);
     try {
       const result = await submitSongRequest(data);
-      if (!result.success && result.error) {
-        throw new Error(result.error);
+      if (!result.success) {
+        throw new Error(result.error || 'Request gagal dikirim ke server.');
       }
       if (result.requests) {
         setRequests(result.requests);
       }
-      setTimeout(() => setActiveTab('feed'), 800);
+      setTimeout(() => setActiveTab('feed'), 1500);
     } finally {
       setIsSubmitting(false);
     }

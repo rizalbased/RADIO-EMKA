@@ -140,7 +140,7 @@ export function subscribeToSongRequests(callbacks: {
 
 /**
  * Inserts a new song request into Supabase song_requests.
- * Performs duplicate validation: rejects if same song is in 'pending' or 'playing'.
+ * Follows strict Supabase Auth verification & INSERT error logging.
  */
 export async function insertSongRequest(data: {
   studentName: string;
@@ -156,73 +156,167 @@ export async function insertSongRequest(data: {
 }): Promise<{ success: boolean; request?: SongRequest; error?: string }> {
   const client = getSupabaseClient();
   if (!client) {
+    console.error('[REQUEST SUPABASE ERROR]', { message: 'Supabase client is not configured' });
     return { success: false, error: 'Supabase client not configured.' };
   }
 
   const normTitle = data.songTitle.trim();
   const normArtist = data.artist.trim();
-  const cleanVideoId = data.youtubeVideoId && data.youtubeVideoId.trim().length === 11 ? data.youtubeVideoId.trim() : null;
+  const cleanVideoId = data.youtubeVideoId && data.youtubeVideoId.trim().length === 11 ? data.youtubeVideoId.trim() : (data.youtubeVideoId?.trim() || '');
 
-  console.log(`[SUPABASE REQUEST] Submitting: "${normTitle}" by "${normArtist}" (videoId=${cleanVideoId || 'none'})`);
+  console.log('[REQUEST] submit started');
 
   try {
-    // 1. Ensure anonymous user session
-    const userId = await ensureAnonymousSession();
+    // 1. Get user via Supabase Auth
+    let currentUser: any = null;
+    try {
+      const { data: userData, error: userError } = await client.auth.getUser();
+      if (!userError && userData?.user?.id) {
+        currentUser = userData.user;
+      }
+    } catch {}
 
-    // 2. Duplicate validation against 'pending' and 'playing'
-    let query = client
-      .from('song_requests')
-      .select('id, video_id, title, channel_title, status')
-      .in('status', ['pending', 'playing']);
-
-    if (cleanVideoId) {
-      query = query.or(`video_id.eq.${cleanVideoId},and(title.ilike.${normTitle},channel_title.ilike.${normArtist})`);
-    } else {
-      query = query.ilike('title', normTitle).ilike('channel_title', normArtist);
+    // 2. If userError or user doesn't exist, try getSession()
+    if (!currentUser) {
+      try {
+        const { data: sessionData } = await client.auth.getSession();
+        if (sessionData?.session?.user?.id) {
+          currentUser = sessionData.session.user;
+        }
+      } catch {}
     }
 
-    const { data: existingRows, error: checkErr } = await query;
-    if (!checkErr && existingRows && existingRows.length > 0) {
-      const isPlaying = existingRows.some(r => r.status === 'playing');
-      const errorMsg = isPlaying ? 'Lagu sedang diputar.' : 'Lagu tersebut sudah ada di antrean.';
-      console.warn(`[SUPABASE REQUEST] Duplicate rejected: ${errorMsg}`);
-      return { success: false, error: errorMsg };
+    // 3. If session does not exist, signInAnonymously()
+    if (!currentUser) {
+      try {
+        if (typeof client.auth.signInAnonymously === 'function') {
+          const { error: anonErr } = await client.auth.signInAnonymously();
+          if (anonErr) {
+            console.error('[REQUEST SUPABASE ERROR]', {
+              code: anonErr.code,
+              message: anonErr.message,
+              details: (anonErr as any).details,
+              hint: (anonErr as any).hint
+            });
+          }
+        }
+      } catch (err: any) {
+        console.error('[REQUEST SUPABASE ERROR]', { message: err?.message });
+      }
+
+      // Re-fetch user
+      try {
+        const { data: refreshedUser } = await client.auth.getUser();
+        if (refreshedUser?.user?.id) {
+          currentUser = refreshedUser.user;
+        }
+      } catch {}
     }
 
-    // 3. Single INSERT into song_requests
-    const rowToInsert: Partial<DbSongRequest> = {
-      user_id: userId || undefined,
-      video_id: cleanVideoId || '',
+    // 4. If currentUser is still not available, FAIL the request
+    if (!currentUser || !currentUser.id) {
+      console.error('[REQUEST SUPABASE ERROR]', {
+        message: 'Gagal mendapatkan currentUser.id dari Supabase Auth'
+      });
+      console.log('[REQUEST] INSERT ERROR', {
+        message: 'Current user session missing'
+      });
+      return { success: false, error: 'Request gagal: Sesi pengguna Supabase tidak valid.' };
+    }
+
+    // Debug logging as specified in Section 6
+    console.log(`[REQUEST] Supabase session:\n${Boolean(currentUser)}`);
+    console.log(`[REQUEST] user id:\n${currentUser.id}`);
+    console.log(`[REQUEST] video id:\n${cleanVideoId || 'none'}`);
+    console.log('[REQUEST] inserting into:\npublic.song_requests');
+
+    // 5. Pre-check duplicate validation against 'pending' and 'playing'
+    try {
+      let query = client
+        .from('song_requests')
+        .select('id, video_id, title, channel_title, status')
+        .in('status', ['pending', 'playing']);
+
+      if (cleanVideoId) {
+        query = query.or(`video_id.eq.${cleanVideoId},and(title.ilike.${normTitle},channel_title.ilike.${normArtist})`);
+      } else {
+        query = query.ilike('title', normTitle).ilike('channel_title', normArtist);
+      }
+
+      const { data: existingRows } = await query;
+      if (existingRows && existingRows.length > 0) {
+        const isPlaying = existingRows.some(r => r.status === 'playing');
+        const errorMsg = isPlaying ? 'Lagu sedang diputar.' : 'Lagu tersebut sudah ada di antrean.';
+        console.warn(`[REQUEST] Duplicate rejected: ${errorMsg}`);
+        return { success: false, error: errorMsg };
+      }
+    } catch {}
+
+    // 6. Direct INSERT into public.song_requests with exact database mapping
+    const insertPayload: any = {
+      user_id: currentUser.id,
+      video_id: cleanVideoId,
       title: normTitle,
-      channel_title: normArtist,
+      channel_title: normArtist || null,
       thumbnail_url: data.coverUrl || (cleanVideoId ? `https://i.ytimg.com/vi/${cleanVideoId}/hqdefault.jpg` : null),
       requester_name: data.studentName.trim(),
-      class_name: data.className.trim(),
-      target_person: data.targetPerson ? data.targetPerson.trim() : 'Semua Teman',
-      message: data.message ? data.message.trim() : 'Salam hangat!',
-      mood: data.mood || '🎧 Vibe Check',
-      likes: 0,
-      status: 'pending',
-      created_at: new Date().toISOString()
+      class_name: data.className ? data.className.trim() : null,
+      target_person: data.targetPerson ? data.targetPerson.trim() : null,
+      message: data.message ? data.message.trim() : null,
+      mood: data.mood || null,
+      status: 'pending'
     };
 
     const { data: inserted, error: insertErr } = await client
       .from('song_requests')
-      .insert(rowToInsert)
+      .insert(insertPayload)
       .select()
       .single();
 
     if (insertErr) {
-      console.error('[SUPABASE REQUEST] Insert error:', insertErr.message);
-      return { success: false, error: insertErr.message || 'Gagal mengirim request lagu. Silakan coba lagi.' };
+      console.error('[REQUEST SUPABASE ERROR]', {
+        code: insertErr.code,
+        message: insertErr.message,
+        details: (insertErr as any).details,
+        hint: (insertErr as any).hint
+      });
+      console.log('[REQUEST] INSERT ERROR', {
+        code: insertErr.code,
+        message: insertErr.message
+      });
+
+      // Handle duplicate error from unique constraint/index
+      if (
+        insertErr.code === '23505' ||
+        insertErr.message?.toLowerCase().includes('duplicate') ||
+        insertErr.message?.toLowerCase().includes('already exists')
+      ) {
+        return { success: false, error: 'Lagu tersebut sudah ada di antrean.' };
+      }
+
+      return {
+        success: false,
+        error: `Request gagal dikirim ke server. ${insertErr.message || ''}`.trim()
+      };
     }
 
+    if (!inserted || !inserted.id) {
+      console.error('[REQUEST SUPABASE ERROR]', { message: 'Database did not return inserted record' });
+      console.log('[REQUEST] INSERT ERROR', { message: 'No inserted ID returned' });
+      return { success: false, error: 'Request gagal dikirim ke server.' };
+    }
+
+    console.log(`[REQUEST] INSERT SUCCESS\n${inserted.id}`);
+
     const mapped = mapDbRequestToSongRequest(inserted as DbSongRequest);
-    console.log('[SUPABASE] request inserted:', mapped.id);
     return { success: true, request: mapped };
   } catch (err: any) {
-    console.error('[SUPABASE REQUEST] Exception during insert:', err);
-    return { success: false, error: 'Gagal mengirim request lagu. Silakan coba lagi.' };
+    console.error('[REQUEST SUPABASE ERROR]', {
+      message: err?.message || 'Unexpected exception during insert',
+      stack: err?.stack
+    });
+    console.log('[REQUEST] INSERT ERROR', { message: err?.message });
+    return { success: false, error: 'Request gagal dikirim ke server.' };
   }
 }
 
