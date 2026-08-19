@@ -283,6 +283,8 @@ export const RadioEngineProvider: React.FC<{
     setPlayerError(null);
     setIsAutoplayBlocked(false);
 
+    console.log('[EMKA YOUTUBE] LOAD VIDEO', validId);
+
     const player = playerRef.current;
     if (player && playerReadyRef.current) {
       try {
@@ -430,6 +432,8 @@ export const RadioEngineProvider: React.FC<{
           },
           events: {
             onReady: (event: any) => {
+              const targetVideoId = pendingVideoIdRef.current || ytVideoIdRef.current || '';
+              console.log('[EMKA YOUTUBE] PLAYER READY', targetVideoId);
               console.log('[PLAYER] READY');
               playerRef.current = event.target;
               playerReadyRef.current = true;
@@ -441,7 +445,6 @@ export const RadioEngineProvider: React.FC<{
               if (ytMutedRef.current) event.target.mute();
               else event.target.unMute();
 
-              const targetVideoId = pendingVideoIdRef.current || ytVideoIdRef.current;
               if (targetVideoId) {
                 const validId = extractValidYouTubeId(targetVideoId);
                 if (validId) {
@@ -479,6 +482,7 @@ export const RadioEngineProvider: React.FC<{
 
                   let dur = 0;
                   let cur = 0;
+                  let currentVid = ytVideoIdRef.current || '';
 
                   if (event.target.getDuration) {
                     dur = event.target.getDuration();
@@ -491,7 +495,7 @@ export const RadioEngineProvider: React.FC<{
 
                   if (event.target.getVideoData) {
                     const vData = event.target.getVideoData();
-                    const currentVid = vData?.video_id || ytVideoIdRef.current || '';
+                    currentVid = vData?.video_id || currentVid;
                     if (currentVid) {
                       setActiveTrackMetadata(prev => ({
                         videoId: currentVid,
@@ -507,15 +511,25 @@ export const RadioEngineProvider: React.FC<{
                       }));
                     }
                   }
+
+                  console.log('[EMKA YOUTUBE] PLAY', currentVid);
                   break;
                 }
                 case 2: // PAUSED
+                  {
+                    const currentVid = ytVideoIdRef.current || '';
+                    console.log('[EMKA YOUTUBE] PAUSE', currentVid);
+                  }
                   if (event.target.getCurrentTime) {
                     const cur = event.target.getCurrentTime();
                     setYtCurrentTime(cur);
                   }
                   break;
                 case 0: // ENDED
+                  {
+                    const currentVid = ytVideoIdRef.current || '';
+                    console.log('[EMKA YOUTUBE] ENDED', currentVid);
+                  }
                   handleTrackEndedRef.current();
                   break;
               }
@@ -523,6 +537,7 @@ export const RadioEngineProvider: React.FC<{
             onError: (event: any) => {
               const code = event.data;
               const currentVid = ytVideoIdRef.current || '';
+              console.error('[EMKA YOUTUBE] ERROR', code);
               console.warn(`[PLAYER] ERROR code=${code} videoId=${currentVid}`);
 
               let errorMsg = 'Video tidak dapat diputar.';
