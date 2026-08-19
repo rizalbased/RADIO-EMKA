@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { SongRequest, DbRadioState } from '../types';
+import { PlayerController } from '../components/YouTubeRadioPlayer';
 import {
   fetchRadioStateFromDb,
   updateRadioStateInDb,
@@ -52,6 +53,38 @@ export function extractValidYouTubeId(input: any): string | null {
   return null;
 }
 
+function loadYouTubeIframeAPI(): Promise<any> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') return;
+    if (window.YT && window.YT.Player) {
+      console.log('[EMKA YOUTUBE] API READY');
+      resolve(window.YT);
+      return;
+    }
+
+    const existingScript = document.getElementById('youtube-iframe-api');
+    if (!existingScript) {
+      const tag = document.createElement('script');
+      tag.id = 'youtube-iframe-api';
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    }
+
+    window.onYouTubeIframeAPIReady = () => {
+      console.log('[EMKA YOUTUBE] API READY');
+      resolve(window.YT);
+    };
+
+    const interval = setInterval(() => {
+      if (window.YT && window.YT.Player) {
+        clearInterval(interval);
+        console.log('[EMKA YOUTUBE] API READY');
+        resolve(window.YT);
+      }
+    }, 150);
+  });
+}
+
 export function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds <= 0) return '0:00';
   const totalSecs = Math.floor(seconds);
@@ -100,6 +133,10 @@ interface RadioEngineContextProps {
   setYtVolume: (val: number) => void;
   updateLiveStateOnServer: (statusOverride?: string, positionOverride?: number) => Promise<void>;
   setCustomVideoIdForTrack: (trackId: string, videoId: string) => Promise<void>;
+  registerPlayerController: (controller: PlayerController) => void;
+  handlePlayerStateChange: (state: number) => void;
+  handlePlayerError: (code: number) => void;
+  handleTrackEnded: () => Promise<void>;
 }
 
 const RadioEngineContext = createContext<RadioEngineContextProps | null>(null);
@@ -154,12 +191,24 @@ export const RadioEngineProvider: React.FC<{
   const [isRepeat, setIsRepeat] = useState(false);
 
   // =========================================================================
-  // REFS for Persistent Single YT.Player & Immune to Stale Closures
+  // PLAYER CONTROLLER REF (Delegated to YouTubeRadioPlayer component)
   // =========================================================================
-  const playerRef = useRef<any>(null);
-  const playerReadyRef = useRef<boolean>(false);
-  const pendingVideoIdRef = useRef<string | null>(null);
-  const isCreatingPlayerRef = useRef<boolean>(false);
+  const playerControllerRef = useRef<PlayerController | null>(null);
+
+  const registerPlayerController = useCallback((controller: PlayerController) => {
+    playerControllerRef.current = controller;
+    console.log('[PLAYER] CONTROLLER REGISTERED IN ENGINE');
+
+    controller.setVolume(ytVolumeRef.current);
+    if (ytMutedRef.current) controller.setMuted(true);
+    else controller.setMuted(false);
+
+    const targetVid = ytVideoIdRef.current;
+    if (targetVid) {
+      controller.loadVideo(targetVid);
+    }
+  }, []);
+
   const currentLoadedIdRef = useRef<string | null>(null);
   const isTransitioningRef = useRef<boolean>(false);
 
@@ -224,6 +273,9 @@ export const RadioEngineProvider: React.FC<{
                 duration: 0,
                 currentTime: 0
               });
+              if (playerControllerRef.current) {
+                playerControllerRef.current.loadVideo(validId);
+              }
             }
           }
         }
@@ -234,42 +286,7 @@ export const RadioEngineProvider: React.FC<{
     loadInitialRadioState();
   }, []);
 
-  // 2. Load YouTube IFrame API script ONCE globally
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    if (window.YT && window.YT.Player) {
-      setYoutubeApiReady(true);
-      return;
-    }
-
-    const existingScript = document.getElementById('youtube-iframe-api');
-    if (!existingScript) {
-      const tag = document.createElement('script');
-      tag.id = 'youtube-iframe-api';
-      tag.src = 'https://www.youtube.com/iframe_api';
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      if (firstScriptTag && firstScriptTag.parentNode) {
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-      } else {
-        document.head.appendChild(tag);
-      }
-
-      window.onYouTubeIframeAPIReady = () => {
-        setYoutubeApiReady(true);
-      };
-    } else {
-      const checkInterval = setInterval(() => {
-        if (window.YT && window.YT.Player) {
-          setYoutubeApiReady(true);
-          clearInterval(checkInterval);
-        }
-      }, 150);
-      return () => clearInterval(checkInterval);
-    }
-  }, []);
-
-  // Centralized helper to play a video in the single YT.Player instance
+  // Centralized helper to play a video via playerControllerRef
   const playTrackVideoId = useCallback((validId: string) => {
     if (!validId || validId.length !== 11) {
       console.warn(`[PLAYER] INVALID YOUTUBE VIDEO ID: ${validId}`);
@@ -283,22 +300,13 @@ export const RadioEngineProvider: React.FC<{
     setPlayerError(null);
     setIsAutoplayBlocked(false);
 
-    console.log('[EMKA YOUTUBE] LOAD VIDEO', validId);
+    console.log('[PLAYER] LOAD VIDEO', validId);
 
-    const player = playerRef.current;
-    if (player && playerReadyRef.current) {
-      try {
-        console.log(`[PLAYER] LOAD videoId=${validId}`);
-        player.loadVideoById(validId);
-        player.setVolume(ytVolumeRef.current);
-        if (ytMutedRef.current) player.mute();
-        else player.unMute();
-      } catch (err) {
-        console.warn('[PLAYER] loadVideoById error:', err);
-      }
+    if (playerControllerRef.current) {
+      playerControllerRef.current.loadVideo(validId);
+      playerControllerRef.current.play();
     } else {
-      console.log(`[PLAYER] Player not ready yet, queued pending videoId=${validId}`);
-      pendingVideoIdRef.current = validId;
+      console.warn('[PLAYER] Controller not registered yet');
     }
   }, []);
 
@@ -399,213 +407,89 @@ export const RadioEngineProvider: React.FC<{
     handleTrackEndedRef.current = handleTrackEnded;
   }, [handleTrackEnded]);
 
-  // 3. SINGLE YOUTUBE PLAYER INSTANTIATION (Mounts ONCE into #admin-youtube-player-iframe)
-  useEffect(() => {
-    if (!youtubeApiReady) return;
-    if (playerRef.current || isCreatingPlayerRef.current) return;
-
-    let initTimer: any = null;
-
-    const tryInitPlayer = () => {
-      if (playerRef.current || isCreatingPlayerRef.current) return;
-
-      const iframeTarget = document.getElementById('admin-youtube-player-iframe');
-      if (!iframeTarget) {
-        initTimer = setTimeout(tryInitPlayer, 100);
-        return;
-      }
-
-      isCreatingPlayerRef.current = true;
-      console.log('[PLAYER] CREATE');
-
-      try {
-        new window.YT.Player('admin-youtube-player-iframe', {
-          height: '100%',
-          width: '100%',
-          playerVars: {
-            autoplay: 1,
-            controls: 1,
-            modestbranding: 1,
-            rel: 0,
-            enablejsapi: 1,
-            playsinline: 1
-          },
-          events: {
-            onReady: (event: any) => {
-              const targetVideoId = pendingVideoIdRef.current || ytVideoIdRef.current || '';
-              console.log('[EMKA YOUTUBE] PLAYER READY', targetVideoId);
-              console.log('[PLAYER] READY');
-              playerRef.current = event.target;
-              playerReadyRef.current = true;
-              setPlayerReady(true);
-              setPlayerError(null);
-              setIsAutoplayBlocked(false);
-
-              event.target.setVolume(ytVolumeRef.current);
-              if (ytMutedRef.current) event.target.mute();
-              else event.target.unMute();
-
-              if (targetVideoId) {
-                const validId = extractValidYouTubeId(targetVideoId);
-                if (validId) {
-                  try {
-                    console.log(`[PLAYER] LOAD videoId=${validId}`);
-                    event.target.loadVideoById(validId);
-                    currentLoadedIdRef.current = validId;
-                    pendingVideoIdRef.current = null;
-                  } catch (e) {
-                    console.warn('[PLAYER] Initial load onReady error:', e);
-                  }
-                }
-              }
-            },
-            onStateChange: (event: any) => {
-              const state = event.data;
-              setYtPlayerState(state);
-              ytPlayerStateRef.current = state;
-              console.log(`[PLAYER] STATE: ${state}`);
-
-              switch (state) {
-                case -1: // UNSTARTED
-                  break;
-                case 3: // BUFFERING
-                  break;
-                case 5: // CUED
-                  if (event.target.getDuration) {
-                    const cuedDur = event.target.getDuration();
-                    if (cuedDur > 0) setYtDuration(cuedDur);
-                  }
-                  break;
-                case 1: { // PLAYING
-                  setIsAutoplayBlocked(false);
-                  setPlayerError(null);
-
-                  let dur = 0;
-                  let cur = 0;
-                  let currentVid = ytVideoIdRef.current || '';
-
-                  if (event.target.getDuration) {
-                    dur = event.target.getDuration();
-                    if (dur > 0) setYtDuration(dur);
-                  }
-                  if (event.target.getCurrentTime) {
-                    cur = event.target.getCurrentTime();
-                    setYtCurrentTime(cur);
-                  }
-
-                  if (event.target.getVideoData) {
-                    const vData = event.target.getVideoData();
-                    currentVid = vData?.video_id || currentVid;
-                    if (currentVid) {
-                      setActiveTrackMetadata(prev => ({
-                        videoId: currentVid,
-                        title: vData?.title || prev?.title || playingTrackRef.current?.songTitle || 'YouTube Video',
-                        channelTitle: vData?.author || prev?.channelTitle || playingTrackRef.current?.artist || 'YouTube Channel',
-                        thumbnail: `https://img.youtube.com/vi/${currentVid}/hqdefault.jpg`,
-                        duration: dur,
-                        currentTime: cur,
-                        studentName: prev?.studentName || playingTrackRef.current?.studentName,
-                        className: prev?.className || playingTrackRef.current?.className,
-                        targetPerson: prev?.targetPerson || playingTrackRef.current?.targetPerson,
-                        mood: prev?.mood || playingTrackRef.current?.mood
-                      }));
-                    }
-                  }
-
-                  console.log('[EMKA YOUTUBE] PLAY', currentVid);
-                  break;
-                }
-                case 2: // PAUSED
-                  {
-                    const currentVid = ytVideoIdRef.current || '';
-                    console.log('[EMKA YOUTUBE] PAUSE', currentVid);
-                  }
-                  if (event.target.getCurrentTime) {
-                    const cur = event.target.getCurrentTime();
-                    setYtCurrentTime(cur);
-                  }
-                  break;
-                case 0: // ENDED
-                  {
-                    const currentVid = ytVideoIdRef.current || '';
-                    console.log('[EMKA YOUTUBE] ENDED', currentVid);
-                  }
-                  handleTrackEndedRef.current();
-                  break;
-              }
-            },
-            onError: (event: any) => {
-              const code = event.data;
-              const currentVid = ytVideoIdRef.current || '';
-              console.error('[EMKA YOUTUBE] ERROR', code);
-              console.warn(`[PLAYER] ERROR code=${code} videoId=${currentVid}`);
-
-              let errorMsg = 'Video tidak dapat diputar.';
-              switch (code) {
-                case 2: errorMsg = 'Video ID tidak valid.'; break;
-                case 5: errorMsg = 'Video tidak dapat diputar oleh YouTube Player.'; break;
-                case 100: errorMsg = 'Video sudah tidak tersedia.'; break;
-                case 101:
-                case 150: errorMsg = 'Video ini tidak mengizinkan pemutaran di website.'; break;
-                default: errorMsg = `Gagal memutar video YouTube (Kode: ${code}).`; break;
-              }
-
-              setPlayerError(errorMsg);
-
-              if (autoPlayRef.current && queuedRequestsRef.current.length > 0) {
-                console.log('[PLAYER] Auto-skipping to next queue item in 3s due to player error...');
-                setTimeout(() => {
-                  handleTrackEndedRef.current();
-                }, 3000);
-              }
-            },
-            onAutoplayBlocked: () => {
-              console.warn('[PLAYER] AUTOPLAY BLOCKED by browser');
-              setIsAutoplayBlocked(true);
-            }
-          }
-        });
-      } catch (err) {
-        console.error('[PLAYER] Error instantiating YT.Player:', err);
-        isCreatingPlayerRef.current = false;
-      }
-    };
-
-    tryInitPlayer();
-
-    return () => {
-      if (initTimer) clearTimeout(initTimer);
-    };
-  }, [youtubeApiReady]);
-
-  // Progress Interval during PLAYING
-  useEffect(() => {
-    if (!playerReady || !playerRef.current || ytPlayerState !== 1) return;
-
-    const interval = setInterval(() => {
-      const player = playerRef.current;
-      if (!player) return;
-
-      try {
-        if (typeof player.getCurrentTime === 'function') {
-          const cur = player.getCurrentTime();
+  const handlePlayerStateChange = useCallback((state: number) => {
+    setYtPlayerState(state);
+    ytPlayerStateRef.current = state;
+    
+    switch (state) {
+      case 1: // PLAYING
+        console.log('[PLAYER UI] PLAYING');
+        setIsAutoplayBlocked(false);
+        setPlayerError(null);
+        if (playerControllerRef.current) {
+          const dur = playerControllerRef.current.getDuration();
+          if (dur > 0) setYtDuration(dur);
+          const cur = playerControllerRef.current.getCurrentTime();
           setYtCurrentTime(cur);
         }
-        if (typeof player.getDuration === 'function') {
-          const dur = player.getDuration();
-          if (dur > 0) {
-            setYtDuration(dur);
-          }
+        break;
+      case 2: // PAUSED
+        console.log('[PLAYER UI] PAUSED');
+        if (playerControllerRef.current) {
+          const cur = playerControllerRef.current.getCurrentTime();
+          setYtCurrentTime(cur);
         }
+        break;
+      case 3: // BUFFERING
+        console.log('[PLAYER UI] BUFFERING');
+        break;
+      case 5: // CUED
+        console.log('[PLAYER UI] CUED');
+        if (playerControllerRef.current) {
+          const dur = playerControllerRef.current.getDuration();
+          if (dur > 0) setYtDuration(dur);
+        }
+        break;
+      case 0: // ENDED
+        console.log('[PLAYER UI] ENDED');
+        handleTrackEndedRef.current();
+        break;
+    }
+  }, []);
+
+  const handlePlayerError = useCallback((code: number) => {
+    console.error('[PLAYER UI] ERROR', code);
+    let errorMsg = 'Video tidak dapat diputar.';
+    switch (code) {
+      case 2: errorMsg = 'Video ID tidak valid.'; break;
+      case 5: errorMsg = 'Video tidak dapat diputar oleh YouTube Player.'; break;
+      case 100: errorMsg = 'Video sudah tidak tersedia.'; break;
+      case 101:
+      case 150: errorMsg = 'Video ini tidak mengizinkan pemutaran di website.'; break;
+      default: errorMsg = `Gagal memutar video YouTube (Kode: ${code}).`; break;
+    }
+    setPlayerError(errorMsg);
+
+    if (autoPlayRef.current && queuedRequestsRef.current.length > 0) {
+      console.log('[PLAYER] Auto-skipping to next queue item in 3s due to player error...');
+      setTimeout(() => {
+        handleTrackEndedRef.current();
+      }, 3000);
+    }
+  }, []);
+
+  // Progress Interval during PLAYING using playerControllerRef
+  useEffect(() => {
+    if (ytPlayerState !== 1) return;
+
+    const interval = setInterval(() => {
+      const controller = playerControllerRef.current;
+      if (!controller) return;
+
+      try {
+        const cur = controller.getCurrentTime();
+        setYtCurrentTime(cur);
+        const dur = controller.getDuration();
+        if (dur > 0) setYtDuration(dur);
       } catch (e) {}
     }, 250);
 
     return () => clearInterval(interval);
-  }, [playerReady, ytPlayerState]);
+  }, [ytPlayerState]);
 
   // Admin Play / Pause toggle with Supabase radio_state synchronization
   const togglePlayPause = async () => {
-    const player = playerRef.current;
+    const controller = playerControllerRef.current;
     const isPlaying = ytPlayerStateRef.current === 1 || radioStateRef.current?.status === 'playing';
 
     console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
@@ -614,18 +498,16 @@ export const RadioEngineProvider: React.FC<{
       // 1. Update Supabase radio_state -> paused
       await setAdminPauseRadio();
       // 2. Pause YouTube Player
-      if (player && playerReadyRef.current) {
-        try { player.pauseVideo(); } catch {}
+      if (controller) {
+        controller.pause();
       }
     } else {
       // 1. Update Supabase radio_state -> playing
       await setAdminResumeRadio();
       // 2. Resume YouTube Player
-      if (player && playerReadyRef.current) {
-        try {
-          player.playVideo();
-          setIsAutoplayBlocked(false);
-        } catch {}
+      if (controller) {
+        controller.play();
+        setIsAutoplayBlocked(false);
       } else if (radioStateRef.current?.current_video_id) {
         playTrackVideoId(radioStateRef.current.current_video_id);
       } else if (queuedRequestsRef.current.length > 0) {
@@ -640,24 +522,16 @@ export const RadioEngineProvider: React.FC<{
 
   const handleSeekChange = (val: number) => {
     setYtCurrentTime(val);
-    const player = playerRef.current;
-    if (player && playerReadyRef.current) {
-      try {
-        player.seekTo(val, true);
-        const newTime = typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : val;
-        setYtCurrentTime(newTime);
-      } catch (e) {}
+    if (playerControllerRef.current) {
+      playerControllerRef.current.seekTo(val);
     }
   };
 
   const setCustomYtVolume = (val: number) => {
     setYtVolume(val);
     ytVolumeRef.current = val;
-    const player = playerRef.current;
-    if (player && playerReadyRef.current) {
-      try {
-        player.setVolume(val);
-      } catch {}
+    if (playerControllerRef.current) {
+      playerControllerRef.current.setVolume(val);
     }
   };
 
@@ -665,16 +539,11 @@ export const RadioEngineProvider: React.FC<{
     const nextMute = !ytMutedRef.current;
     setYtMuted(nextMute);
     ytMutedRef.current = nextMute;
-    const player = playerRef.current;
-    if (player && playerReadyRef.current) {
-      try {
-        if (nextMute) {
-          player.mute();
-        } else {
-          player.unMute();
-          player.setVolume(ytVolumeRef.current);
-        }
-      } catch {}
+    if (playerControllerRef.current) {
+      playerControllerRef.current.setMuted(nextMute);
+      if (!nextMute) {
+        playerControllerRef.current.setVolume(ytVolumeRef.current);
+      }
     }
   };
 
@@ -697,13 +566,11 @@ export const RadioEngineProvider: React.FC<{
   };
 
   const handlePreviousRequest = async () => {
-    const player = playerRef.current;
-    if (!player || !playerReadyRef.current) return;
-    try {
+    if (playerControllerRef.current) {
       console.log('[PLAYER] Previous: seeking to start');
-      player.seekTo(0, true);
+      playerControllerRef.current.seekTo(0);
       setYtCurrentTime(0);
-    } catch (e) {}
+    }
   };
 
   const setCustomVideoIdForTrack = async (trackId: string, inputId: string) => {
@@ -727,10 +594,10 @@ export const RadioEngineProvider: React.FC<{
     <RadioEngineContext.Provider value={{
       isMasterTab,
       userRole,
-      ytPlayer: playerRef.current,
-      playerReady,
-      youtubeApiReady,
-      pendingVideoId: pendingVideoIdRef.current,
+      ytPlayer: null,
+      playerReady: true,
+      youtubeApiReady: true,
+      pendingVideoId: null,
       playerError,
       ytPlayerState,
       ytVolume,
@@ -758,7 +625,11 @@ export const RadioEngineProvider: React.FC<{
       playQueueTrack,
       setYtVolume: setCustomYtVolume,
       updateLiveStateOnServer,
-      setCustomVideoIdForTrack
+      setCustomVideoIdForTrack,
+      registerPlayerController,
+      handlePlayerStateChange,
+      handlePlayerError,
+      handleTrackEnded
     }}>
       {children}
     </RadioEngineContext.Provider>

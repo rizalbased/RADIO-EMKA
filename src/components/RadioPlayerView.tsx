@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { SongRequest } from '../types';
 import { useRadioEngine, formatTime } from '../contexts/RadioEngineContext';
+import { YouTubeRadioPlayer } from './YouTubeRadioPlayer';
 
 interface RadioPlayerViewProps {
   requests: SongRequest[];
@@ -56,12 +57,17 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
     handlePreviousRequest,
     setYtVolume,
     isMasterTab,
-    setCustomVideoIdForTrack
+    setCustomVideoIdForTrack,
+    registerPlayerController,
+    handlePlayerStateChange,
+    handlePlayerError,
+    handleTrackEnded
   } = useRadioEngine();
 
   const playingTrack = requests.find((r) => r.status === 'Playing');
   const queuedRequests = requests.filter((r) => r.status === 'Queued');
   const isPlaying = ytPlayerState === 1;
+  const isBuffering = ytPlayerState === 3;
 
   const [isLiked, setIsLiked] = useState(false);
   const [isYtModalOpen, setIsYtModalOpen] = useState(false);
@@ -139,8 +145,13 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
         id="youtube-player-stage"
         className="w-full aspect-video bg-black rounded-2xl overflow-hidden relative border-2 border-primary shadow-soft flex items-center justify-center"
       >
-        {/* The Actual YouTube IFrame mounts into this DOM element */}
-        <div id="admin-youtube-player-iframe" className="w-full h-full" />
+        {/* The Actual YouTube IFrame mounts into YouTubeRadioPlayer */}
+        <YouTubeRadioPlayer
+          onRegisterController={registerPlayerController}
+          onStateChange={handlePlayerStateChange}
+          onError={handlePlayerError}
+          onTrackEnded={handleTrackEnded}
+        />
 
         {/* Standby / Searching Overlay */}
         {(!ytVideoId || isSearchingYt) && (
@@ -256,18 +267,24 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
         <div className="flex items-center space-x-4 flex-shrink-0 self-end sm:self-center">
           {/* Animated Neon Lime Equalizer */}
           <div className="flex items-end space-x-1 h-8 px-3 py-1 rounded-xl bg-elevated border border-subtle">
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : 'h-1.5'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : 'h-3'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : 'h-5'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : 'h-3.5'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : 'h-6'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : 'h-4'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : 'h-2'}`}></span>
-            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : 'h-1'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : isBuffering ? 'animate-pulse h-2' : 'h-1.5'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : isBuffering ? 'animate-pulse h-3 delay-75' : 'h-3'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : isBuffering ? 'animate-pulse h-2 delay-150' : 'h-5'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : isBuffering ? 'animate-pulse h-3.5 delay-200' : 'h-3.5'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : isBuffering ? 'animate-pulse h-2.5 delay-300' : 'h-6'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : isBuffering ? 'animate-pulse h-4 delay-150' : 'h-4'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : isBuffering ? 'animate-pulse h-2 delay-75' : 'h-2'}`}></span>
+            <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : isBuffering ? 'animate-pulse h-1' : 'h-1'}`}></span>
           </div>
 
           {/* Action Icons */}
           <div className="flex items-center space-x-1 text-secondary">
+            {isBuffering && (
+              <span className="text-[10px] font-bold text-[#B6FF00] animate-pulse px-2 uppercase">
+                Memuat...
+              </span>
+            )}
+
             <button
               onClick={handleLikeClick}
               className={`p-2 rounded-xl hover:bg-elevated transition ${
@@ -375,7 +392,7 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
           {/* BIG CIRCULAR PLAY/PAUSE BUTTON (#B6FF00, 52px diameter) */}
           <button
             onClick={togglePlayPause}
-            className="w-14 h-14 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center border-2 border-black shadow-pop active:scale-95 transition hover:brightness-105"
+            className={`w-14 h-14 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center border-2 border-black shadow-pop active:scale-95 transition hover:brightness-105 ${isPlaying ? 'is-playing scale-105' : ''}`}
             title={isPlaying ? 'Jeda Lagu' : 'Putar Lagu'}
           >
             {isPlaying ? (

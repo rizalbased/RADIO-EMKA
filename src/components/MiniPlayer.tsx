@@ -28,6 +28,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
 
   const playingTrack = requests.find((r) => r.status === 'Playing');
   const isPlaying = ytPlayerState === 1;
+  const isBuffering = ytPlayerState === 3;
 
   const displayTitle = activeTrackMetadata?.title || playingTrack?.songTitle || 'EMKA Radio Standby';
   const displayArtist = activeTrackMetadata?.channelTitle || playingTrack?.artist || 'Radiomu Multi Karya';
@@ -62,8 +63,9 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
           <p className="text-xs sm:text-sm font-black text-primary truncate font-sans">
             {displayTitle}
           </p>
-          <p className="text-[11px] text-secondary font-medium truncate">
+          <p className="text-[11px] text-secondary font-medium truncate flex items-center gap-2">
             {playingTrack ? `${displayArtist} • ${playingTrack.studentName}` : displayArtist}
+            {isBuffering && <span className="text-[#B6FF00] animate-pulse">Memuat...</span>}
           </p>
         </div>
       </div>
@@ -72,11 +74,11 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
       <div className="flex items-center space-x-3 sm:space-x-4">
         {/* Animated Equalizer */}
         <div className="hidden lg:flex items-end space-x-0.5 h-6 px-2.5 py-1 rounded-xl bg-elevated border border-subtle">
-          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : 'h-1'}`}></span>
-          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : 'h-2'}`}></span>
-          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : 'h-4'}`}></span>
-          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : 'h-2.5'}`}></span>
-          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : 'h-5'}`}></span>
+          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : isBuffering ? 'animate-pulse h-1' : 'h-1'}`}></span>
+          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : isBuffering ? 'animate-pulse h-2 delay-75' : 'h-2'}`}></span>
+          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : isBuffering ? 'animate-pulse h-1 delay-150' : 'h-4'}`}></span>
+          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : isBuffering ? 'animate-pulse h-2.5 delay-200' : 'h-2.5'}`}></span>
+          <span className={`w-0.5 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : isBuffering ? 'animate-pulse h-1.5 delay-300' : 'h-5'}`}></span>
         </div>
 
         <button
@@ -90,7 +92,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
         {/* Big Circular Play/Pause */}
         <button
           onClick={togglePlayPause}
-          className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center border-2 border-black shadow-sm active:scale-95 transition hover:brightness-105"
+          className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center border-2 border-black shadow-sm active:scale-95 transition hover:brightness-105 ${isPlaying ? 'is-playing scale-105' : ''}`}
           title={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
