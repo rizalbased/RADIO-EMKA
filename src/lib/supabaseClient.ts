@@ -39,8 +39,19 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
+console.log('[EMKA ENV]', {
+  supabaseUrlConfigured: Boolean((import.meta as any).env?.VITE_SUPABASE_URL),
+  supabaseKeyConfigured: Boolean((import.meta as any).env?.VITE_SUPABASE_ANON_KEY),
+  youtubeConfigured: Boolean((import.meta as any).env?.VITE_YOUTUBE_API_KEY)
+});
+
 export function printEmkaDiagnostic(): void {
   if (typeof window === 'undefined') return;
+  console.log('[EMKA ENV]', {
+    supabaseUrlConfigured: Boolean((import.meta as any).env?.VITE_SUPABASE_URL),
+    supabaseKeyConfigured: Boolean((import.meta as any).env?.VITE_SUPABASE_ANON_KEY),
+    youtubeConfigured: Boolean((import.meta as any).env?.VITE_YOUTUBE_API_KEY)
+  });
   console.log(
     '[EMKA SUPABASE]',
     Boolean((import.meta as any).env?.VITE_SUPABASE_URL),
