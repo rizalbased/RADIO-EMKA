@@ -42,6 +42,7 @@ export async function fetchSongRequestsFromDb(): Promise<{
     const isAnonymous = Boolean(session?.user?.is_anonymous);
     const role = (session?.user?.app_metadata as any)?.role || (isAnonymous ? 'anonymous' : 'authenticated');
 
+    console.log('[EMKA USER]', userId);
     console.log(`[ADMIN AUTH] session exists: ${sessionExists}`);
     console.log(`[ADMIN AUTH] user id: ${userId}`);
     console.log(`[ADMIN AUTH] is anonymous: ${isAnonymous}`);
@@ -53,6 +54,8 @@ export async function fetchSongRequestsFromDb(): Promise<{
       .from('song_requests')
       .select('*')
       .order('created_at', { ascending: true });
+
+    console.log('[EMKA ADMIN FETCH]', data, error);
 
     if (error) {
       lastAdminQueueError = { code: error.code, message: error.message };
@@ -337,7 +340,7 @@ export function subscribeToSongRequests(callbacks: {
   console.log('[EMKA REALTIME]\nSUBSCRIBING');
 
   const channel = client
-    .channel('emka-song-requests')
+    .channel('emka-radio-song-requests')
     .on(
       'postgres_changes',
       {
@@ -348,6 +351,7 @@ export function subscribeToSongRequests(callbacks: {
       (payload) => {
         console.log('[EMKA REALTIME]', payload);
         if (payload.eventType === 'INSERT' && payload.new) {
+          console.log('[EMKA REALTIME INSERT]', payload.new);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
         } else if (payload.eventType === 'UPDATE' && payload.new) {
@@ -368,15 +372,13 @@ export function subscribeToSongRequests(callbacks: {
       (payload) => {
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
-          console.log('[EMKA REALTIME]\nRADIO_STATE UPDATE');
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
     )
     .subscribe((status, err) => {
+      console.log('[EMKA REALTIME STATUS]', status);
       if (status === 'SUBSCRIBED') {
-        console.log('[EMKA REALTIME]\nSUBSCRIBED');
-        // Initial fetch on connection to guarantee no stale state
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
         });
@@ -387,7 +389,7 @@ export function subscribeToSongRequests(callbacks: {
         });
       }
       if (err) {
-        console.error('[EMKA REALTIME]\nERROR', err);
+        console.error('[EMKA REALTIME ERROR]', err);
       }
     });
 
