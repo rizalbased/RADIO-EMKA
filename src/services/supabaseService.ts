@@ -337,7 +337,7 @@ export function subscribeToSongRequests(callbacks: {
   console.log('[EMKA REALTIME]\nSUBSCRIBING');
 
   const channel = client
-    .channel('emka-radio-global-sync')
+    .channel('emka-song-requests')
     .on(
       'postgres_changes',
       {
@@ -346,16 +346,14 @@ export function subscribeToSongRequests(callbacks: {
         table: 'song_requests'
       },
       (payload) => {
+        console.log('[EMKA REALTIME]', payload);
         if (payload.eventType === 'INSERT' && payload.new) {
-          console.log('[EMKA REALTIME]\nINSERT');
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
         } else if (payload.eventType === 'UPDATE' && payload.new) {
-          console.log('[EMKA REALTIME]\nUPDATE');
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
         } else if (payload.eventType === 'DELETE' && payload.old) {
-          console.log('[EMKA REALTIME]\nDELETE');
           callbacks.onDelete?.(payload.old.id);
         }
       }
