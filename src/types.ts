@@ -106,6 +106,18 @@ export interface RadioHost {
   isOnAir: boolean;
 }
 
+export interface DbRadioState {
+  id: number;
+  status: 'playing' | 'paused' | 'standby';
+  current_request_id?: string | null;
+  current_video_id?: string | null;
+  current_title?: string | null;
+  current_channel_title?: string | null;
+  current_thumbnail_url?: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface LiveRadioState {
   videoId: string;
   trackId: string;

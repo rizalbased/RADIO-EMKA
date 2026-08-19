@@ -4,12 +4,48 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { google } from 'googleapis';
 import { GoogleGenAI } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+function sanitizeSupabaseUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let url = rawUrl.trim();
+  url = url.replace(/^["'`]|["'`]$/g, '').trim();
+  url = url.replace(/\/(rest|auth|storage|graphql)\/v\d+.*$/i, '');
+  url = url.replace(/\/+$/, '');
+  return url;
+}
+
+function sanitizeSupabaseKey(rawKey: string): string {
+  if (!rawKey || typeof rawKey !== 'string') return '';
+  let key = rawKey.trim();
+  key = key.replace(/^["'`]|["'`]$/g, '').trim();
+  return key;
+}
+
+// Server-side Supabase client for admin operations
+const rawServerSupabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const rawServerSupabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+
+const serverSupabaseUrl = sanitizeSupabaseUrl(rawServerSupabaseUrl);
+const serverSupabaseKey = sanitizeSupabaseKey(rawServerSupabaseKey);
+
+const serverSupabase = serverSupabaseUrl && serverSupabaseKey
+  ? createClient(serverSupabaseUrl, serverSupabaseKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      },
+      db: {
+        schema: 'public'
+      }
+    })
+  : null;
 
 // Local data persistence setup (ensures app works even before sheet is linked or as offline backup)
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -946,6 +982,50 @@ app.get('/api/song-search', async (req, res) => {
     console.log('iTunes search error:', err.message);
     res.json({ results: [] });
   }
+});
+
+// Admin Server-Side PIN Verification and Supabase Admin Session generation
+app.post('/api/admin/verify-pin', async (req, res) => {
+  const { pin } = req.body;
+  const serverAdminPin = (process.env.ADMIN_PIN || '1902').trim();
+
+  if (!pin || typeof pin !== 'string' || pin.trim() !== serverAdminPin) {
+    return res.status(401).json({
+      success: false,
+      error: 'Tidak dapat masuk. PIN salah.'
+    });
+  }
+
+  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@emkaradio.sch.id').trim();
+  const adminPassword = (process.env.ADMIN_PASSWORD || 'emkaradio1902').trim();
+
+  if (serverSupabase) {
+    try {
+      const { data, error } = await serverSupabase.auth.signInWithPassword({
+        email: adminEmail,
+        password: adminPassword
+      });
+
+      if (!error && data?.session) {
+        return res.json({
+          success: true,
+          session: {
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token
+          },
+          user: data.user
+        });
+      }
+    } catch (err: any) {
+      console.warn('[SERVER ADMIN AUTH] Sign in error:', err?.message);
+    }
+  }
+
+  return res.json({
+    success: true,
+    email: adminEmail,
+    password: adminPassword
+  });
 });
 
 // 8. Gemini AI Vibe Check & Wingman

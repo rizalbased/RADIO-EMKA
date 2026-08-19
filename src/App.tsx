@@ -19,7 +19,7 @@ import { GlobalYouTubePlayer } from './components/GlobalYouTubePlayer';
 import { MiniPlayer } from './components/MiniPlayer';
 import { AccessLandingView } from './components/AccessLandingView';
 
-import { SongRequest, SheetConfig, RadioHost } from './types';
+import { SongRequest, SheetConfig, RadioHost, DbRadioState } from './types';
 import { ensureAnonymousSession, getAdminSessionStatus } from './lib/supabaseClient';
 import {
   fetchSheetConfig,
@@ -63,6 +63,7 @@ export default function App() {
   const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
   const [isAccessChosen, setIsAccessChosen] = useState<boolean>(false);
   const [requests, setRequests] = useState<SongRequest[]>([]);
+  const [radioState, setRadioState] = useState<DbRadioState | null>(null);
   const [sheetConfig, setSheetConfig] = useState<SheetConfig>({ connected: false });
   const [radioHosts, setRadioHosts] = useState<RadioHost[]>([
     {
@@ -166,17 +167,23 @@ export default function App() {
       })
       .catch((e) => console.error('Error loading sheet config:', e));
 
-    // Real-time Firestore Song Requests Listener
-    const unsubRequests = subscribeSongRequests((latestRequests) => {
-      const seen = new Set<string>();
-      const unique = (latestRequests || []).filter((item) => {
-        if (!item || !item.id || seen.has(item.id)) return false;
-        seen.add(item.id);
-        return true;
-      });
-      setRequests(unique);
-      setIsSyncing(false);
-    });
+    // Real-time Firestore Song Requests Listener & Radio State Listener
+    const unsubRequests = subscribeSongRequests(
+      (latestRequests) => {
+        const seen = new Set<string>();
+        const unique = (latestRequests || []).filter((item) => {
+          if (!item || !item.id || seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
+        setRequests(unique);
+        setIsSyncing(false);
+      },
+      (newRadioState) => {
+        console.log('[REALTIME SYNC] Radio State updated from Supabase:', newRadioState);
+        setRadioState(newRadioState);
+      }
+    );
 
     // Real-time Firestore Radio Hosts Listener
     const unsubHosts = subscribeRadioHosts((latestHosts) => {
@@ -309,6 +316,7 @@ export default function App() {
     <ThemeProvider>
       <RadioEngineProvider
         requests={requests}
+        radioStateProp={radioState}
         onUpdateStatus={handleUpdateStatus}
         userRole={userRole}
       >

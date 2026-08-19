@@ -3,10 +3,19 @@ import {
   isSupabaseConfigured,
   ensureAnonymousSession,
   getAdminSessionStatus,
+  loginAdminWithServerPin,
   loginAdminToSupabase,
   logoutAdminFromSupabase
 } from '../lib/supabaseClient';
-import { SongRequest, DbSongRequest, mapDbRequestToSongRequest, MoodTag } from '../types';
+import { SongRequest, DbSongRequest, DbRadioState, mapDbRequestToSongRequest, MoodTag } from '../types';
+
+export {
+  ensureAnonymousSession,
+  getAdminSessionStatus,
+  loginAdminWithServerPin,
+  loginAdminToSupabase,
+  logoutAdminFromSupabase
+};
 
 let realtimeChannel: any = null;
 let lastAdminQueueError: { code?: string; message: string } | null = null;
@@ -67,14 +76,251 @@ export async function fetchSongRequestsFromDb(): Promise<{
 }
 
 /**
- * Subscribes to Supabase Realtime changes on song_requests table.
- * Uses channel 'admin-song-requests'. Strictly single subscription instance with clean teardown.
+ * Fetches current radio state from public.radio_state (row id = 1).
+ */
+export async function fetchRadioStateFromDb(): Promise<{
+  state: DbRadioState | null;
+  error?: { code?: string; message: string };
+}> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { state: null };
+  }
+
+  try {
+    const { data, error } = await client
+      .from('radio_state')
+      .select('*')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[RADIO STATE] fetch error:', error);
+      return { state: null, error: { code: error.code, message: error.message } };
+    }
+
+    return { state: data as DbRadioState | null };
+  } catch (err: any) {
+    console.warn('[RADIO STATE] fetch exception:', err);
+    return { state: null, error: { message: err?.message } };
+  }
+}
+
+/**
+ * Updates public.radio_state for row id = 1.
+ */
+export async function updateRadioStateInDb(
+  patch: Partial<DbRadioState>
+): Promise<{ success: boolean; state?: DbRadioState; error?: string }> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { success: false, error: 'Supabase client not configured' };
+  }
+
+  try {
+    const nowIso = new Date().toISOString();
+    const payload: any = {
+      ...patch,
+      id: 1,
+      updated_at: nowIso
+    };
+
+    const { data, error } = await client
+      .from('radio_state')
+      .upsert(payload, { onConflict: 'id' })
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[RADIO STATE] update error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    console.log('[RADIO STATE] updated successfully:', patch.status, patch.current_title);
+    return { success: true, state: data as DbRadioState };
+  } catch (err: any) {
+    console.error('[RADIO STATE] update exception:', err);
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Admin action: Play a song request.
+ * Updates song_requests (status = playing) and radio_state (id = 1, status = playing).
+ */
+export async function setAdminPlaySong(req: {
+  id: string;
+  video_id?: string;
+  youtubeVideoId?: string;
+  title?: string;
+  songTitle?: string;
+  channel_title?: string;
+  artist?: string;
+  thumbnail_url?: string;
+  coverUrl?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, error: 'Supabase client not configured' };
+
+  try {
+    const nowIso = new Date().toISOString();
+    const videoId = req.video_id || req.youtubeVideoId || '';
+    const title = req.title || req.songTitle || '';
+    const artist = req.channel_title || req.artist || '';
+    const thumbnail = req.thumbnail_url || req.coverUrl || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+
+    // 1. Update song_requests: mark previously playing requests as 'played'
+    await client
+      .from('song_requests')
+      .update({ status: 'played', played_at: nowIso, updated_at: nowIso })
+      .eq('status', 'playing');
+
+    // 2. Mark target request as 'playing'
+    await client
+      .from('song_requests')
+      .update({ status: 'playing', played_at: null, updated_at: nowIso })
+      .eq('id', req.id);
+
+    // 3. Update radio_state (id = 1)
+    const { error: stateErr } = await client
+      .from('radio_state')
+      .upsert({
+        id: 1,
+        status: 'playing',
+        current_request_id: req.id,
+        current_video_id: videoId || null,
+        current_title: title || null,
+        current_channel_title: artist || null,
+        current_thumbnail_url: thumbnail || null,
+        started_at: nowIso,
+        updated_at: nowIso
+      }, { onConflict: 'id' });
+
+    if (stateErr) {
+      console.warn('[RADIO STATE] Play state update warning:', stateErr.message);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('[RADIO STATE] setAdminPlaySong error:', err);
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Admin action: Pause radio.
+ */
+export async function setAdminPauseRadio(): Promise<{ success: boolean; error?: string }> {
+  return await updateRadioStateInDb({ status: 'paused' });
+}
+
+/**
+ * Admin action: Resume radio.
+ */
+export async function setAdminResumeRadio(): Promise<{ success: boolean; error?: string }> {
+  return await updateRadioStateInDb({ status: 'playing' });
+}
+
+/**
+ * Standby state when no song is playing.
+ */
+export async function setRadioStandbyInDb(): Promise<{ success: boolean; error?: string }> {
+  return await updateRadioStateInDb({
+    status: 'standby',
+    current_request_id: null,
+    current_video_id: null,
+    current_title: null,
+    current_channel_title: null,
+    current_thumbnail_url: null,
+    started_at: null
+  });
+}
+
+/**
+ * Handles track completion (YT.PlayerState.ENDED).
+ * 1. Marks current track as 'played'.
+ * 2. Fetches next pending request ordered by created_at ASC.
+ * 3. If found, sets status = 'playing' in song_requests and updates radio_state.
+ * 4. If none found, sets radio_state status = 'standby'.
+ */
+export async function handleSongEndedTransition(currentRequestId?: string | null): Promise<{
+  success: boolean;
+  nextRequest?: SongRequest | null;
+  error?: string;
+}> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, nextRequest: null };
+
+  try {
+    const nowIso = new Date().toISOString();
+
+    // 1. Mark current request as 'played'
+    if (currentRequestId) {
+      await client
+        .from('song_requests')
+        .update({ status: 'played', played_at: nowIso, updated_at: nowIso })
+        .eq('id', currentRequestId);
+    }
+
+    // 2. Fetch next pending request (FIFO)
+    const { data: nextRows, error: nextErr } = await client
+      .from('song_requests')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (nextErr) {
+      console.warn('[RADIO STATE] Query next request warning:', nextErr.message);
+    }
+
+    const nextDb = (nextRows && nextRows.length > 0) ? (nextRows[0] as DbSongRequest) : null;
+
+    if (nextDb) {
+      // 3. Update next request to 'playing'
+      await client
+        .from('song_requests')
+        .update({ status: 'playing', played_at: null, updated_at: nowIso })
+        .eq('id', nextDb.id);
+
+      // 4. Update radio_state with next track
+      await client
+        .from('radio_state')
+        .upsert({
+          id: 1,
+          status: 'playing',
+          current_request_id: nextDb.id,
+          current_video_id: nextDb.video_id || null,
+          current_title: nextDb.title || null,
+          current_channel_title: nextDb.channel_title || null,
+          current_thumbnail_url: nextDb.thumbnail_url || (nextDb.video_id ? `https://i.ytimg.com/vi/${nextDb.video_id}/hqdefault.jpg` : null),
+          started_at: nowIso,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+
+      const mapped = mapDbRequestToSongRequest(nextDb);
+      return { success: true, nextRequest: mapped };
+    } else {
+      // 5. Standby mode
+      await setRadioStandbyInDb();
+      return { success: true, nextRequest: null };
+    }
+  } catch (err: any) {
+    console.error('[RADIO STATE] Song ended transition exception:', err);
+    return { success: false, error: err?.message, nextRequest: null };
+  }
+}
+
+/**
+ * Subscribes to Supabase Realtime changes on both public.song_requests and public.radio_state.
+ * Strictly single subscription instance with clean teardown.
  */
 export function subscribeToSongRequests(callbacks: {
   onInsert?: (newReq: SongRequest) => void;
   onUpdate?: (updatedReq: SongRequest) => void;
   onDelete?: (deletedId: string) => void;
   onSyncAll?: (requests: SongRequest[]) => void;
+  onRadioStateChange?: (state: DbRadioState) => void;
 }): () => void {
   const client = getSupabaseClient();
   if (!client) {
@@ -90,7 +336,7 @@ export function subscribeToSongRequests(callbacks: {
   }
 
   const channel = client
-    .channel('admin-song-requests')
+    .channel('emka-radio-global-sync')
     .on(
       'postgres_changes',
       {
@@ -113,12 +359,32 @@ export function subscribeToSongRequests(callbacks: {
         }
       }
     )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'radio_state'
+      },
+      (payload) => {
+        const rawNew = payload.new as any;
+        if (rawNew && rawNew.id === 1) {
+          console.log('[SUPABASE] realtime radio_state:', rawNew.status, rawNew.current_title);
+          callbacks.onRadioStateChange?.(rawNew as DbRadioState);
+        }
+      }
+    )
     .subscribe((status, err) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[SUPABASE] realtime connected');
-        // Initial fetch on connection to guarantee no stale queue state
+        console.log('[SUPABASE] realtime connected to emka-radio-global-sync');
+        // Initial fetch on connection to guarantee no stale state
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
+        });
+        fetchRadioStateFromDb().then(({ state }) => {
+          if (state) {
+            callbacks.onRadioStateChange?.(state);
+          }
         });
       }
       if (err) {

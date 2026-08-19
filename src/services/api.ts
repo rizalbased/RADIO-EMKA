@@ -1,4 +1,4 @@
-import { SheetConfig, SongRequest, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult } from '../types';
+import { SheetConfig, SongRequest, DbRadioState, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult } from '../types';
 import {
   fetchSongRequestsFromDb,
   subscribeToSongRequests,
@@ -8,18 +8,39 @@ import {
   clearAllDbSongRequests,
   likeDbSongRequest,
   updateDbRequestVideoId,
-  getLastAdminQueueError
+  fetchRadioStateFromDb,
+  updateRadioStateInDb,
+  setAdminPlaySong,
+  setAdminPauseRadio,
+  setAdminResumeRadio,
+  setRadioStandbyInDb,
+  handleSongEndedTransition,
+  getLastAdminQueueError,
+  loginAdminWithServerPin,
+  loginAdminToSupabase,
+  logoutAdminFromSupabase
 } from './supabaseService';
 import {
   isSupabaseConfigured,
-  getAdminSessionStatus,
-  loginAdminToSupabase,
-  logoutAdminFromSupabase
+  getAdminSessionStatus
 } from '../lib/supabaseClient';
 
-export { getLastAdminQueueError, getAdminSessionStatus, loginAdminToSupabase, logoutAdminFromSupabase };
+export {
+  getLastAdminQueueError,
+  getAdminSessionStatus,
+  loginAdminToSupabase,
+  logoutAdminFromSupabase,
+  loginAdminWithServerPin,
+  fetchRadioStateFromDb,
+  updateRadioStateInDb,
+  setAdminPlaySong,
+  setAdminPauseRadio,
+  setAdminResumeRadio,
+  setRadioStandbyInDb,
+  handleSongEndedTransition
+};
 
-// LocalStorage Keys for resilient offline/cached data
+// LocalStorage Keys for UI preferences and local caching
 const STORAGE_KEYS = {
   REQUESTS: 'emka_radio_requests',
   HOSTS: 'emka_radio_hosts',
@@ -27,6 +48,9 @@ const STORAGE_KEYS = {
   LIVE_STATE: 'emka_live_state',
   ADMIN_AUTH: 'emka_admin_auth'
 };
+
+// In-memory global state cache for synchronized UI
+let globalRequestsMemory: SongRequest[] = [];
 
 export const DEFAULT_HOSTS: RadioHost[] = [
   {
@@ -68,26 +92,11 @@ function saveLocalHosts(hosts: RadioHost[]) {
 }
 
 export function getLocalRequests(): SongRequest[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.REQUESTS);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        // Strict deduplication by ID
-        const seen = new Set<string>();
-        return parsed.filter((item) => {
-          if (!item || !item.id || seen.has(item.id)) return false;
-          seen.add(item.id);
-          return true;
-        });
-      }
-    }
-  } catch {}
-  return [];
+  return globalRequestsMemory;
 }
 
 export function saveLocalRequests(requests: SongRequest[]) {
+  globalRequestsMemory = requests;
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(requests));
@@ -205,21 +214,36 @@ export async function fetchSongRequests(): Promise<{ requests: SongRequest[]; sy
   return { requests: getLocalRequests(), synced: false };
 }
 
-export function subscribeSongRequests(onUpdate: (requests: SongRequest[]) => void): () => void {
-  // Always emit current local/cached requests initially
-  onUpdate(getLocalRequests());
+export function subscribeSongRequests(
+  onUpdate: (requests: SongRequest[]) => void,
+  onRadioStateChange?: (state: DbRadioState) => void
+): () => void {
+  // 1. Fetch initial data from Supabase immediately on mount
+  if (isSupabaseConfigured()) {
+    fetchSongRequestsFromDb().then(({ requests, isSupabase }) => {
+      if (isSupabase && requests) {
+        saveLocalRequests(requests);
+        onUpdate(requests);
+      }
+    });
+  } else {
+    onUpdate(getLocalRequests());
+  }
 
   if (isSupabaseConfigured()) {
-    console.log('[API] Subscribing to Supabase Realtime song_requests channel...');
+    console.log('[API] Subscribing to Supabase Realtime emka-radio-global-sync channel...');
     const unsubscribeSupabase = subscribeToSongRequests({
       onInsert: (newReq) => {
         const current = getLocalRequests();
         const exists = current.some((r) => r.id === newReq.id);
         if (!exists) {
-          const updated = [...current, newReq];
+          const updated = [...current, newReq].sort((a, b) => {
+            const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return tA - tB;
+          });
           saveLocalRequests(updated);
           onUpdate(updated);
-          window.dispatchEvent(new Event('storage'));
         }
       },
       onUpdate: (updatedReq) => {
@@ -232,32 +256,38 @@ export function subscribeSongRequests(onUpdate: (requests: SongRequest[]) => voi
         } else {
           updated = [...current, updatedReq];
         }
+        updated.sort((a, b) => {
+          const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return tA - tB;
+        });
         saveLocalRequests(updated);
         onUpdate(updated);
-        window.dispatchEvent(new Event('storage'));
       },
       onDelete: (deletedId) => {
         const current = getLocalRequests();
         const updated = current.filter((r) => r.id !== deletedId);
         saveLocalRequests(updated);
         onUpdate(updated);
-        window.dispatchEvent(new Event('storage'));
       },
       onSyncAll: (allReqs) => {
-        saveLocalRequests(allReqs);
-        onUpdate(allReqs);
-        window.dispatchEvent(new Event('storage'));
+        const sorted = (allReqs || []).slice().sort((a, b) => {
+          const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return tA - tB;
+        });
+        saveLocalRequests(sorted);
+        onUpdate(sorted);
+      },
+      onRadioStateChange: (state) => {
+        if (onRadioStateChange) {
+          onRadioStateChange(state);
+        }
       }
     });
 
-    const storageListener = () => {
-      onUpdate(getLocalRequests());
-    };
-    window.addEventListener('storage', storageListener);
-
     return () => {
       unsubscribeSupabase();
-      window.removeEventListener('storage', storageListener);
     };
   }
 
@@ -299,7 +329,6 @@ export async function submitSongRequest(data: {
       if (!current.some((r) => r.id === result.request!.id)) {
         current.push(result.request);
         saveLocalRequests(current);
-        window.dispatchEvent(new Event('storage'));
       }
       return { success: true, request: result.request, requests: current };
     }
@@ -368,13 +397,9 @@ export async function submitSongRequest(data: {
 
   console.log(`[QUEUE] enqueue requestId="${newRequest.id}" videoId="${newRequest.youtubeVideoId || 'none'}"`);
 
-  // Insert exactly once
   current.push(newRequest);
   saveLocalRequests(current);
   console.log(`[QUEUE] added total=${current.length}`);
-
-  // Broadcast storage change
-  window.dispatchEvent(new Event('storage'));
 
   return { success: true, request: newRequest, requests: current };
 }
@@ -665,21 +690,16 @@ export async function loginAdmin(
     return { success: false, error: res.error || 'Login admin gagal.' };
   }
 
-  // If 4-digit PIN entered (1902, 1077, etc.)
-  const pin = pinOrEmail.trim();
-  if (pin === '1902' || pin === '1077' || pin === 'admin' || pin === '1234') {
-    // Attempt Supabase Admin Auth
-    const res = await loginAdminToSupabase();
+  // Server-side PIN verification (zero hardcoded PIN on frontend)
+  const res = await loginAdminWithServerPin(pinOrEmail);
+  if (res.success) {
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
-    }
-    if (!res.success) {
-      console.warn('[ADMIN AUTH] Note: Supabase sign in with default credentials returned:', res.error);
     }
     return { success: true };
   }
 
-  return { success: false, error: 'PIN Admin salah! (Default PIN: 1902)' };
+  return { success: false, error: res.error || 'Tidak dapat masuk. PIN salah.' };
 }
 
 export function logoutAdmin(): void {

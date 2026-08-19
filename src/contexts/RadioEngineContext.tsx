@@ -1,6 +1,16 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
-import { SongRequest } from '../types';
-import { updateLiveRadioState, updateRequestYoutubeVideoId, searchYouTubeVideos } from '../services/api';
+import { SongRequest, DbRadioState } from '../types';
+import {
+  fetchRadioStateFromDb,
+  updateRadioStateInDb,
+  setAdminPlaySong,
+  setAdminPauseRadio,
+  setAdminResumeRadio,
+  setRadioStandbyInDb,
+  handleSongEndedTransition,
+  updateRequestYoutubeVideoId,
+  searchYouTubeVideos
+} from '../services/api';
 
 // Declare standard YouTube IFrame API window type
 declare global {
@@ -69,6 +79,7 @@ interface RadioEngineContextProps {
   ytDuration: number;
   ytCurrentTime: number;
   ytVideoId: string | null;
+  radioState: DbRadioState | null;
   activeTrackMetadata: ActiveTrackMetadata | null;
   isSearchingYt: boolean;
   isAutoplayBlocked: boolean;
@@ -102,19 +113,20 @@ export const useRadioEngine = () => {
 export const RadioEngineProvider: React.FC<{
   children: React.ReactNode;
   requests: SongRequest[];
+  radioStateProp?: DbRadioState | null;
   onUpdateStatus: (id: string, status: 'Queued' | 'Playing' | 'Played') => Promise<void>;
   userRole: 'admin' | 'user';
-}> = ({ children, requests, onUpdateStatus, userRole }) => {
+}> = ({ children, requests, radioStateProp, onUpdateStatus, userRole }) => {
   // Strict FIFO queue sorting: oldest arrival timestamp first
   const queuedRequests = requests
-    .filter((r) => r.status === 'Queued')
+    .filter((r) => r.status === 'Queued' || r.status === 'pending')
     .sort((a, b) => {
       const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return timeA - timeB;
     });
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
+  const playingTrack = requests.find((r) => r.status === 'Playing' || r.status === 'playing');
 
   const [autoPlay, setAutoPlay] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -128,6 +140,7 @@ export const RadioEngineProvider: React.FC<{
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
 
+  const [radioState, setRadioState] = useState<DbRadioState | null>(radioStateProp || null);
   const [isSearchingYt, setIsSearchingYt] = useState(false);
   const [ytVideoId, setYtVideoId] = useState<string | null>(null);
   const [ytPlayerState, setYtPlayerState] = useState<number>(-1);
@@ -150,6 +163,7 @@ export const RadioEngineProvider: React.FC<{
   const currentLoadedIdRef = useRef<string | null>(null);
   const isTransitioningRef = useRef<boolean>(false);
 
+  const radioStateRef = useRef<DbRadioState | null>(radioState);
   const autoPlayRef = useRef<boolean>(autoPlay);
   const queuedRequestsRef = useRef<SongRequest[]>(queuedRequests);
   const playingTrackRef = useRef<SongRequest | undefined>(playingTrack);
@@ -158,7 +172,6 @@ export const RadioEngineProvider: React.FC<{
   const ytCurrentTimeRef = useRef<number>(0);
   const ytVolumeRef = useRef<number>(ytVolume);
   const ytMutedRef = useRef<boolean>(ytMuted);
-  const sequenceRef = useRef<number>(1);
   const isRepeatRef = useRef<boolean>(isRepeat);
   const isShuffleRef = useRef<boolean>(isShuffle);
   const onUpdateStatusRef = useRef(onUpdateStatus);
@@ -182,53 +195,46 @@ export const RadioEngineProvider: React.FC<{
   useEffect(() => { onUpdateStatusRef.current = onUpdateStatus; }, [onUpdateStatus]);
   useEffect(() => { requestsRef.current = requests; }, [requests]);
 
-  // Master tab coordination
+  // Sync prop changes for radioState
   useEffect(() => {
-    const TAB_ID = Math.random().toString(36).substring(2, 9);
-    let heartbeatInterval: any;
+    if (radioStateProp) {
+      setRadioState(radioStateProp);
+      radioStateRef.current = radioStateProp;
+    }
+  }, [radioStateProp]);
 
-    const checkMaster = () => {
-      const now = Date.now();
-      const masterStr = localStorage.getItem('fm_radio_master');
-      let masterData = masterStr ? JSON.parse(masterStr) : null;
-
-      if (!masterData || now - masterData.timestamp > 4000) {
-        masterData = { id: TAB_ID, timestamp: now };
-        localStorage.setItem('fm_radio_master', JSON.stringify(masterData));
-        setIsMasterTab(true);
-      } else if (masterData.id === TAB_ID) {
-        masterData.timestamp = now;
-        localStorage.setItem('fm_radio_master', JSON.stringify(masterData));
-        setIsMasterTab(true);
-      } else {
-        setIsMasterTab(false);
-      }
-    };
-
-    checkMaster();
-    heartbeatInterval = setInterval(checkMaster, 1500);
-
-    const handleUnload = () => {
-      const masterStr = localStorage.getItem('fm_radio_master');
-      if (masterStr) {
-        try {
-          const masterData = JSON.parse(masterStr);
-          if (masterData.id === TAB_ID) {
-            localStorage.removeItem('fm_radio_master');
+  // 1. Initial Load of radio_state from Supabase
+  useEffect(() => {
+    async function loadInitialRadioState() {
+      try {
+        const { state } = await fetchRadioStateFromDb();
+        if (state) {
+          console.log('[RADIO STATE] Initial load:', state.status, state.current_title);
+          setRadioState(state);
+          radioStateRef.current = state;
+          if (state.current_video_id) {
+            const validId = extractValidYouTubeId(state.current_video_id);
+            if (validId) {
+              setYtVideoId(validId);
+              setActiveTrackMetadata({
+                videoId: validId,
+                title: state.current_title || 'EMKA Radio Standby',
+                channelTitle: state.current_channel_title || 'EMKA FM',
+                thumbnail: state.current_thumbnail_url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
+                duration: 0,
+                currentTime: 0
+              });
+            }
           }
-        } catch {}
+        }
+      } catch (e) {
+        console.warn('[RADIO STATE] Initial fetch error:', e);
       }
-    };
-    window.addEventListener('beforeunload', handleUnload);
-
-    return () => {
-      clearInterval(heartbeatInterval);
-      window.removeEventListener('beforeunload', handleUnload);
-      handleUnload();
-    };
+    }
+    loadInitialRadioState();
   }, []);
 
-  // 1. Load YouTube IFrame API script ONCE globally
+  // 2. Load YouTube IFrame API script ONCE globally
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -263,123 +269,6 @@ export const RadioEngineProvider: React.FC<{
     }
   }, []);
 
-  const updateLiveStateOnServer = useCallback(async (statusOverride?: string, positionOverride?: number) => {
-    const currentPlayingTrack = playingTrackRef.current;
-    if (!currentPlayingTrack) {
-      try {
-        const nextSeq = sequenceRef.current + 1;
-        sequenceRef.current = nextSeq;
-        await updateLiveRadioState({
-          videoId: '',
-          trackId: '',
-          songTitle: 'EMKA RADIO',
-          artist: 'Standby / Rehat',
-          artworkUrl: '',
-          status: 'IDLE',
-          position: 0,
-          updatedAt: Date.now(),
-          queueIndex: 0,
-          sequence: nextSeq
-        });
-      } catch (e) {}
-      return;
-    }
-
-    try {
-      const nextSeq = sequenceRef.current + 1;
-      sequenceRef.current = nextSeq;
-      let currentStatus: 'PLAYING' | 'PAUSED' | 'IDLE' | 'STOPPED' = 'IDLE';
-      if (statusOverride) {
-        currentStatus = statusOverride as any;
-      } else {
-        const player = playerRef.current;
-        let stateVal = ytPlayerStateRef.current;
-        if (player && typeof player.getPlayerState === 'function') {
-          try { stateVal = player.getPlayerState(); } catch {}
-        }
-        if (stateVal === 1) currentStatus = 'PLAYING';
-        else if (stateVal === 2) currentStatus = 'PAUSED';
-        else if (stateVal === 0) currentStatus = 'STOPPED';
-      }
-
-      const currentPos = positionOverride !== undefined ? positionOverride : ytCurrentTimeRef.current;
-      const qIndex = requestsRef.current.findIndex(r => r.id === currentPlayingTrack.id);
-
-      await updateLiveRadioState({
-        videoId: currentPlayingTrack.youtubeVideoId || ytVideoIdRef.current || '',
-        trackId: currentPlayingTrack.id,
-        songTitle: currentPlayingTrack.songTitle,
-        artist: currentPlayingTrack.artist,
-        artworkUrl: currentPlayingTrack.coverUrl || (ytVideoIdRef.current ? `https://img.youtube.com/vi/${ytVideoIdRef.current}/hqdefault.jpg` : ''),
-        status: currentStatus,
-        position: currentPos,
-        updatedAt: Date.now(),
-        queueIndex: Math.max(0, qIndex),
-        sequence: nextSeq
-      });
-    } catch (e) {}
-  }, []);
-
-  // Autoplay progression when track ends (ONLY triggered on YT.PlayerState.ENDED)
-  const handleTrackEnded = useCallback(async () => {
-    if (isTransitioningRef.current) return;
-    isTransitioningRef.current = true;
-
-    try {
-      const currentTrack = playingTrackRef.current;
-      const currentQueue = queuedRequestsRef.current;
-
-      console.log('[PLAYER] ENDED');
-
-      if (isRepeatRef.current && currentTrack) {
-        if (playerRef.current && playerReadyRef.current) {
-          playerRef.current.seekTo(0, true);
-          playerRef.current.playVideo();
-          setYtCurrentTime(0);
-        }
-        return;
-      }
-
-      const nextQueue = currentQueue && currentQueue.length > 0 
-        ? (isShuffleRef.current ? currentQueue[Math.floor(Math.random() * currentQueue.length)] : currentQueue[0])
-        : null;
-
-      if (autoPlayRef.current && nextQueue) {
-        console.log(`[QUEUE] Autoplay next: "${nextQueue.songTitle}" by ${nextQueue.artist}`);
-        setYtCurrentTime(0);
-        setYtDuration(0);
-        await onUpdateStatusRef.current(nextQueue.id, 'Playing');
-      } else {
-        if (currentTrack) {
-          await onUpdateStatusRef.current(currentTrack.id, 'Played');
-        }
-        setYtVideoId(null);
-        setActiveTrackMetadata(null);
-        setYtCurrentTime(0);
-        setYtDuration(0);
-        currentLoadedIdRef.current = null;
-        if (playerRef.current && playerReadyRef.current) {
-          try {
-            playerRef.current.pauseVideo();
-          } catch {}
-        }
-        updateLiveStateOnServer('IDLE', 0);
-      }
-    } catch (e) {
-      console.error('[PLAYER] Error during track transition:', e);
-    } finally {
-      setTimeout(() => {
-        isTransitioningRef.current = false;
-      }, 500);
-    }
-  }, [updateLiveStateOnServer]);
-
-  // Keep a ref to handleTrackEnded so YouTube callbacks are never stale
-  const handleTrackEndedRef = useRef(handleTrackEnded);
-  useEffect(() => {
-    handleTrackEndedRef.current = handleTrackEnded;
-  }, [handleTrackEnded]);
-
   // Centralized helper to play a video in the single YT.Player instance
   const playTrackVideoId = useCallback((validId: string) => {
     if (!validId || validId.length !== 11) {
@@ -411,117 +300,102 @@ export const RadioEngineProvider: React.FC<{
     }
   }, []);
 
-  // Direct queue play function with 0 reload & instant playback
+  // Admin Play: Play track from queue
   const playQueueTrack = useCallback(async (request: SongRequest) => {
-    console.log(`[QUEUE] PLAY: "${request.songTitle}" by ${request.artist}`);
-    
-    // Atomically set this track as Playing
-    await onUpdateStatusRef.current(request.id, 'Playing');
+    console.log(`[ADMIN PLAY] Play: "${request.songTitle}" by ${request.artist}`);
 
-    // If request already has valid videoId, start loading immediately
-    const validId = extractValidYouTubeId(request.youtubeVideoId);
+    // Resolve or find YouTube Video ID if needed
+    let validId = extractValidYouTubeId(request.youtubeVideoId);
+    let resolvedTitle = request.songTitle;
+    let resolvedArtist = request.artist;
+    let resolvedThumb = request.coverUrl;
+
+    if (!validId) {
+      setIsSearchingYt(true);
+      const searchQuery = `${request.songTitle} ${request.artist} official audio`;
+      const results = await searchYouTubeVideos(searchQuery);
+      if (results && results.length > 0) {
+        validId = extractValidYouTubeId(results[0].videoId);
+        resolvedTitle = results[0].title;
+        resolvedArtist = results[0].channelTitle;
+        resolvedThumb = results[0].thumbnail;
+        if (validId) {
+          await updateRequestYoutubeVideoId(request.id, validId);
+        }
+      }
+      setIsSearchingYt(false);
+    }
+
+    // 1. Update Supabase song_requests & radio_state
+    await setAdminPlaySong({
+      id: request.id,
+      video_id: validId || '',
+      title: resolvedTitle,
+      channel_title: resolvedArtist,
+      thumbnail_url: resolvedThumb
+    });
+
+    // 2. Load into player without reload
     if (validId) {
       playTrackVideoId(validId);
     }
   }, [playTrackVideoId]);
 
-  // 2. CENTRALIZED TRACK RESOLVER & DISPATCHER
-  const playingTrackId = playingTrack?.id;
-  const playingTrackTitle = playingTrack?.songTitle;
-  const playingTrackArtist = playingTrack?.artist;
-  const playingTrackVideoId = playingTrack?.youtubeVideoId;
+  // Autoplay progression when track ends (Triggered on YT.PlayerState.ENDED)
+  const handleTrackEnded = useCallback(async () => {
+    if (isTransitioningRef.current) return;
+    isTransitioningRef.current = true;
 
-  useEffect(() => {
-    if (!playingTrackId) {
-      if (ytVideoIdRef.current) {
-        setYtVideoId(null);
-        ytVideoIdRef.current = null;
-        currentLoadedIdRef.current = null;
-        setActiveTrackMetadata(null);
-        setYtCurrentTime(0);
-        setYtDuration(0);
-        if (playerRef.current && playerReadyRef.current) {
-          try { playerRef.current.pauseVideo(); } catch {}
-        }
-        updateLiveStateOnServer('IDLE', 0);
-      }
-      return;
-    }
+    try {
+      console.log('[PLAYER] YT.PlayerState.ENDED');
+      const currentReqId = radioStateRef.current?.current_request_id || playingTrackRef.current?.id || null;
 
-    let isCancelled = false;
+      // Handle transition in Supabase (marks current as played, picks next pending, updates radio_state)
+      const transitionResult = await handleSongEndedTransition(currentReqId);
 
-    const resolveAndPlay = async () => {
-      try {
-        let validId = extractValidYouTubeId(playingTrackVideoId);
-        let fetchedTitle = playingTrackTitle || 'Music';
-        let fetchedChannel = playingTrackArtist || 'Artist';
-        let fetchedThumb = playingTrackRef.current?.coverUrl || '';
-
-        // If no valid 11-char videoId stored, search YouTube Data API
-        if (!validId) {
-          setIsSearchingYt(true);
-          const searchQuery = `${playingTrackTitle} ${playingTrackArtist} official audio`;
-          console.log(`[PLAYER] Searching YouTube Data API for: "${searchQuery}"`);
+      if (transitionResult.nextRequest) {
+        const nextReq = transitionResult.nextRequest;
+        console.log(`[QUEUE] Next track: "${nextReq.songTitle}" by ${nextReq.artist}`);
+        const nextVid = extractValidYouTubeId(nextReq.youtubeVideoId);
+        if (nextVid) {
+          playTrackVideoId(nextVid);
+        } else {
+          // Resolve video ID
+          const searchQuery = `${nextReq.songTitle} ${nextReq.artist} official audio`;
           const results = await searchYouTubeVideos(searchQuery);
-
           if (results && results.length > 0) {
             const foundId = extractValidYouTubeId(results[0].videoId);
             if (foundId) {
-              validId = foundId;
-              fetchedTitle = results[0].title;
-              fetchedChannel = results[0].channelTitle;
-              fetchedThumb = results[0].thumbnail;
-              await updateRequestYoutubeVideoId(playingTrackId, validId);
+              await updateRequestYoutubeVideoId(nextReq.id, foundId);
+              playTrackVideoId(foundId);
             }
           }
         }
-
-        if (isCancelled) return;
-        setIsSearchingYt(false);
-
-        if (!validId || validId.length !== 11) {
-          console.warn('[PLAYER] INVALID YOUTUBE VIDEO ID for track:', playingTrackTitle);
-          setPlayerError('Video YouTube tidak valid.');
-          if (autoPlayRef.current && queuedRequestsRef.current.length > 0) {
-            setTimeout(() => {
-              handleTrackEndedRef.current();
-            }, 2500);
-          }
-          return;
-        }
-
-        // Set active metadata
-        setActiveTrackMetadata({
-          videoId: validId,
-          title: fetchedTitle,
-          channelTitle: fetchedChannel,
-          thumbnail: fetchedThumb || `https://img.youtube.com/vi/${validId}/hqdefault.jpg`,
-          duration: 0,
-          currentTime: 0,
-          studentName: playingTrackRef.current?.studentName,
-          className: playingTrackRef.current?.className,
-          targetPerson: playingTrackRef.current?.targetPerson,
-          mood: playingTrackRef.current?.mood
-        });
-
-        // Load into player if not already loaded
-        if (currentLoadedIdRef.current !== validId) {
-          playTrackVideoId(validId);
-        }
-      } catch (err) {
-        console.error('[PLAYER] Resolve and play error:', err);
-        if (!isCancelled) {
-          setIsSearchingYt(false);
+      } else {
+        console.log('[PLAYER] No next request. Entering standby.');
+        setYtVideoId(null);
+        setActiveTrackMetadata(null);
+        setYtCurrentTime(0);
+        setYtDuration(0);
+        currentLoadedIdRef.current = null;
+        if (playerRef.current && playerReadyRef.current) {
+          try { playerRef.current.pauseVideo(); } catch {}
         }
       }
-    };
+    } catch (e) {
+      console.error('[PLAYER] Error during track transition:', e);
+    } finally {
+      setTimeout(() => {
+        isTransitioningRef.current = false;
+      }, 500);
+    }
+  }, [playTrackVideoId]);
 
-    resolveAndPlay();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [playingTrackId, playingTrackTitle, playingTrackArtist, playingTrackVideoId, playTrackVideoId, updateLiveStateOnServer]);
+  // Keep a ref to handleTrackEnded so YouTube callbacks are never stale
+  const handleTrackEndedRef = useRef(handleTrackEnded);
+  useEffect(() => {
+    handleTrackEndedRef.current = handleTrackEnded;
+  }, [handleTrackEnded]);
 
   // 3. SINGLE YOUTUBE PLAYER INSTANTIATION (Mounts ONCE into #admin-youtube-player-iframe)
   useEffect(() => {
@@ -535,7 +409,6 @@ export const RadioEngineProvider: React.FC<{
 
       const iframeTarget = document.getElementById('admin-youtube-player-iframe');
       if (!iframeTarget) {
-        // DOM element not mounted yet, retry in 100ms
         initTimer = setTimeout(tryInitPlayer, 100);
         return;
       }
@@ -614,7 +487,6 @@ export const RadioEngineProvider: React.FC<{
                   if (event.target.getCurrentTime) {
                     cur = event.target.getCurrentTime();
                     setYtCurrentTime(cur);
-                    updateLiveStateOnServer('PLAYING', cur);
                   }
 
                   if (event.target.getVideoData) {
@@ -641,7 +513,6 @@ export const RadioEngineProvider: React.FC<{
                   if (event.target.getCurrentTime) {
                     const cur = event.target.getCurrentTime();
                     setYtCurrentTime(cur);
-                    updateLiveStateOnServer('PAUSED', cur);
                   }
                   break;
                 case 0: // ENDED
@@ -656,27 +527,16 @@ export const RadioEngineProvider: React.FC<{
 
               let errorMsg = 'Video tidak dapat diputar.';
               switch (code) {
-                case 2:
-                  errorMsg = 'Video ID tidak valid.';
-                  break;
-                case 5:
-                  errorMsg = 'Video tidak dapat diputar oleh YouTube Player.';
-                  break;
-                case 100:
-                  errorMsg = 'Video sudah tidak tersedia.';
-                  break;
+                case 2: errorMsg = 'Video ID tidak valid.'; break;
+                case 5: errorMsg = 'Video tidak dapat diputar oleh YouTube Player.'; break;
+                case 100: errorMsg = 'Video sudah tidak tersedia.'; break;
                 case 101:
-                case 150:
-                  errorMsg = 'Video ini tidak mengizinkan pemutaran di website.';
-                  break;
-                default:
-                  errorMsg = `Gagal memutar video YouTube (Kode: ${code}).`;
-                  break;
+                case 150: errorMsg = 'Video ini tidak mengizinkan pemutaran di website.'; break;
+                default: errorMsg = `Gagal memutar video YouTube (Kode: ${code}).`; break;
               }
 
               setPlayerError(errorMsg);
 
-              // If queue has more items and autoplay is enabled, advance to next track in 3 seconds
               if (autoPlayRef.current && queuedRequestsRef.current.length > 0) {
                 console.log('[PLAYER] Auto-skipping to next queue item in 3s due to player error...');
                 setTimeout(() => {
@@ -701,13 +561,11 @@ export const RadioEngineProvider: React.FC<{
     return () => {
       if (initTimer) clearTimeout(initTimer);
     };
-  }, [youtubeApiReady, updateLiveStateOnServer]);
+  }, [youtubeApiReady]);
 
-  // 4. SINGLE PROGRESS INTERVAL: only active during PLAYING (ytPlayerState === 1)
+  // Progress Interval during PLAYING
   useEffect(() => {
     if (!playerReady || !playerRef.current || ytPlayerState !== 1) return;
-
-    let syncCounter = 0;
 
     const interval = setInterval(() => {
       const player = playerRef.current;
@@ -717,11 +575,6 @@ export const RadioEngineProvider: React.FC<{
         if (typeof player.getCurrentTime === 'function') {
           const cur = player.getCurrentTime();
           setYtCurrentTime(cur);
-
-          syncCounter++;
-          if (syncCounter % 4 === 0) {
-            updateLiveStateOnServer('PLAYING', cur);
-          }
         }
         if (typeof player.getDuration === 'function') {
           const dur = player.getDuration();
@@ -733,68 +586,41 @@ export const RadioEngineProvider: React.FC<{
     }, 250);
 
     return () => clearInterval(interval);
-  }, [playerReady, ytPlayerState, updateLiveStateOnServer]);
+  }, [playerReady, ytPlayerState]);
 
-  // Direct, Realtime Play / Pause toggle with YouTube Player as source of truth
+  // Admin Play / Pause toggle with Supabase radio_state synchronization
   const togglePlayPause = async () => {
     const player = playerRef.current;
-    const exists = !!player && playerReadyRef.current;
+    const isPlaying = ytPlayerStateRef.current === 1 || radioStateRef.current?.status === 'playing';
 
-    console.log('[PLAYER] PLAY/PAUSE CLICK');
-    console.log(`[PLAYER] INSTANCE EXISTS: ${exists}`);
+    console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
 
-    if (!player || !playerReadyRef.current) {
-      console.warn('[PLAYER] YouTube Player instance is not ready.');
-      if (playingTrackRef.current) {
-        const vid = extractValidYouTubeId(playingTrackRef.current.youtubeVideoId);
-        if (vid) playTrackVideoId(vid);
+    if (isPlaying) {
+      // 1. Update Supabase radio_state -> paused
+      await setAdminPauseRadio();
+      // 2. Pause YouTube Player
+      if (player && playerReadyRef.current) {
+        try { player.pauseVideo(); } catch {}
+      }
+    } else {
+      // 1. Update Supabase radio_state -> playing
+      await setAdminResumeRadio();
+      // 2. Resume YouTube Player
+      if (player && playerReadyRef.current) {
+        try {
+          player.playVideo();
+          setIsAutoplayBlocked(false);
+        } catch {}
+      } else if (radioStateRef.current?.current_video_id) {
+        playTrackVideoId(radioStateRef.current.current_video_id);
       } else if (queuedRequestsRef.current.length > 0) {
         await playQueueTrack(queuedRequestsRef.current[0]);
       }
-      return;
-    }
-
-    try {
-      const currentState = typeof player.getPlayerState === 'function' 
-        ? player.getPlayerState() 
-        : ytPlayerStateRef.current;
-      
-      console.log(`[PLAYER] STATE: ${currentState}`);
-
-      if (currentState === 1) { // Currently PLAYING (1) -> Pause it
-        console.log('[PLAYER] PAUSE CLICK');
-        console.log('[PLAYER] PAUSE');
-        player.pauseVideo();
-      } else { // Currently PAUSED (2), CUED (5), UNSTARTED (-1), or ENDED (0) -> Play it
-        console.log('[PLAYER] PLAY CLICK');
-        console.log('[PLAYER] PLAY');
-        player.playVideo();
-        setIsAutoplayBlocked(false);
-      }
-    } catch (e) {
-      console.warn('[PLAYER] togglePlayPause error:', e);
     }
   };
 
   const startRadioPlayback = async () => {
-    const player = playerRef.current;
-    console.log('[PLAYER] PLAY CLICK');
-    console.log(`[PLAYER] INSTANCE EXISTS: ${!!player}`);
-
-    if (!player || !playerReadyRef.current) {
-      if (playingTrackRef.current) {
-        const vid = extractValidYouTubeId(playingTrackRef.current.youtubeVideoId);
-        if (vid) playTrackVideoId(vid);
-      } else if (queuedRequestsRef.current.length > 0) {
-        await playQueueTrack(queuedRequestsRef.current[0]);
-      }
-      return;
-    }
-    try {
-      console.log('[PLAYER] PLAY');
-      player.playVideo();
-      setIsAutoplayBlocked(false);
-    } catch (e) {}
+    await togglePlayPause();
   };
 
   const handleSeekChange = (val: number) => {
@@ -805,7 +631,6 @@ export const RadioEngineProvider: React.FC<{
         player.seekTo(val, true);
         const newTime = typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : val;
         setYtCurrentTime(newTime);
-        updateLiveStateOnServer(undefined, newTime);
       } catch (e) {}
     }
   };
@@ -881,6 +706,8 @@ export const RadioEngineProvider: React.FC<{
     }
   };
 
+  const updateLiveStateOnServer = async () => {};
+
   return (
     <RadioEngineContext.Provider value={{
       isMasterTab,
@@ -896,6 +723,7 @@ export const RadioEngineProvider: React.FC<{
       ytDuration,
       ytCurrentTime,
       ytVideoId,
+      radioState,
       activeTrackMetadata,
       isSearchingYt,
       isAutoplayBlocked,

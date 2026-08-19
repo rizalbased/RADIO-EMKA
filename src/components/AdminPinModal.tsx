@@ -124,7 +124,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
           </div>
           <h3 className="text-xl font-black text-primary font-display uppercase tracking-tight">ADMIN EMKA RADIO</h3>
           <p className="text-xs font-semibold text-secondary">
-            {authMode === 'pin' ? 'Masukkan PIN admin (1902) untuk membuka dashboard' : 'Masuk menggunakan Akun Admin Supabase Auth'}
+            {authMode === 'pin' ? 'Masukkan PIN admin untuk membuka portal siaran' : 'Masuk menggunakan Akun Admin Supabase Auth'}
           </p>
         </div>
 
@@ -147,14 +147,14 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
             <div>
               <label className="block text-xs font-black text-primary mb-2 flex items-center justify-center gap-1.5 uppercase tracking-wider font-mono">
                 <KeyRound className="w-3.5 h-3.5 text-[#FF4F91]" />
-                <span>PIN ADMIN (4 DIGIT)</span>
+                <span>PIN ADMIN</span>
               </label>
               <input
                 ref={inputRef}
                 type="password"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                maxLength={4}
+                maxLength={8}
                 placeholder="• • • •"
                 value={pin}
                 onChange={handlePinChange}
@@ -213,7 +213,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
             }}
             className="text-[11px] font-bold text-secondary hover:text-primary underline"
           >
-            {authMode === 'pin' ? 'Opsi: Masuk dengan Email & Password Supabase' : 'Kembali ke Masuk dengan PIN (1902)'}
+            {authMode === 'pin' ? 'Opsi: Masuk dengan Email & Password Supabase' : 'Kembali ke Masuk dengan PIN'}
           </button>
         </div>
       </div>

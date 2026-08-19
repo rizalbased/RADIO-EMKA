@@ -1,19 +1,45 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+export function sanitizeSupabaseUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let url = rawUrl.trim();
+  // Strip quotes
+  url = url.replace(/^["'`]|["'`]$/g, '').trim();
+  // Strip subpaths if user pasted full REST or Auth endpoint URL
+  url = url.replace(/\/(rest|auth|storage|graphql)\/v\d+.*$/i, '');
+  // Strip trailing slashes
+  url = url.replace(/\/+$/, '');
+  return url;
+}
+
+export function sanitizeSupabaseKey(rawKey: string): string {
+  if (!rawKey || typeof rawKey !== 'string') return '';
+  let key = rawKey.trim();
+  key = key.replace(/^["'`]|["'`]$/g, '').trim();
+  return key;
+}
+
+const rawSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+const rawSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+
+const supabaseUrl = sanitizeSupabaseUrl(rawSupabaseUrl);
+const supabaseAnonKey = sanitizeSupabaseKey(rawSupabaseAnonKey);
 
 let clientInstance: SupabaseClient | null = null;
 let anonymousAuthPromise: Promise<string | null> | null = null;
+
+export function resetSupabaseClient(): void {
+  clientInstance = null;
+}
 
 export function isSupabaseConfigured(): boolean {
   return Boolean(
     supabaseUrl && 
     supabaseAnonKey && 
     typeof supabaseUrl === 'string' && 
-    supabaseUrl.trim().startsWith('http') && 
+    supabaseUrl.startsWith('http') && 
     typeof supabaseAnonKey === 'string' && 
-    supabaseAnonKey.trim().length > 10
+    supabaseAnonKey.length > 10
   );
 }
 
@@ -22,11 +48,15 @@ export function getSupabaseClient(): SupabaseClient | null {
     return null;
   }
   if (!clientInstance) {
-    clientInstance = createClient(supabaseUrl.trim(), supabaseAnonKey.trim(), {
+    console.log(`[SUPABASE] Initializing client with sanitized URL: ${supabaseUrl}`);
+    clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: false
+      },
+      db: {
+        schema: 'public'
       },
       realtime: {
         params: {
@@ -150,7 +180,69 @@ export async function getAdminSessionStatus(): Promise<{
 }
 
 /**
- * Signs in as permanent Admin using Supabase Auth.
+ * Signs in as Admin via server-side PIN verification.
+ * No PIN or admin credentials are stored or compared in frontend.
+ */
+export async function loginAdminWithServerPin(
+  pin: string
+): Promise<{ success: boolean; error?: string; user?: any }> {
+  try {
+    const response = await fetch('/api/admin/verify-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.trim() })
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      return { success: false, error: data.error || 'Tidak dapat masuk. PIN salah.' };
+    }
+
+    const client = getSupabaseClient();
+    if (!client) {
+      return { success: true };
+    }
+
+    // 1. If server returned Supabase Auth session tokens, set session directly
+    if (data.session?.access_token && data.session?.refresh_token) {
+      const { data: sessionData, error: sessionErr } = await client.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token
+      });
+
+      if (sessionErr) {
+        console.warn('[ADMIN AUTH] setSession warning:', sessionErr.message);
+      } else if (sessionData?.user) {
+        console.log('[ADMIN AUTH] Supabase admin session established');
+        return { success: true, user: sessionData.user };
+      }
+    }
+
+    // 2. If server returned authorized credentials to sign in client
+    if (data.email && data.password) {
+      const { data: authData, error: authErr } = await client.auth.signInWithPassword({
+        email: data.email,
+        password: data.password
+      });
+
+      if (authErr) {
+        console.warn('[ADMIN AUTH] signInWithPassword error:', authErr.message);
+        return { success: false, error: authErr.message };
+      }
+
+      console.log('[ADMIN AUTH] Supabase admin sign-in succeeded');
+      return { success: true, user: authData.user };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('[ADMIN AUTH] Verify PIN exception:', err);
+    return { success: false, error: 'Tidak dapat masuk. PIN salah atau server bermasalah.' };
+  }
+}
+
+/**
+ * Signs in as permanent Admin using Supabase Auth with custom email and password.
  */
 export async function loginAdminToSupabase(
   customEmail?: string,
@@ -161,22 +253,14 @@ export async function loginAdminToSupabase(
     return { success: false, error: 'Supabase client not configured.' };
   }
 
-  const email = (
-    customEmail ||
-    (import.meta as any).env?.VITE_ADMIN_EMAIL ||
-    'admin@emkaradio.sch.id'
-  ).trim();
-
-  const password = (
-    customPassword ||
-    (import.meta as any).env?.VITE_ADMIN_PASSWORD ||
-    'emkaradio1902'
-  ).trim();
+  if (!customEmail || !customPassword) {
+    return { success: false, error: 'Email dan password harus diisi.' };
+  }
 
   try {
     const { data, error } = await client.auth.signInWithPassword({
-      email,
-      password
+      email: customEmail.trim(),
+      password: customPassword.trim()
     });
 
     if (error) {
@@ -185,12 +269,12 @@ export async function loginAdminToSupabase(
     }
 
     const user = data.user;
-    const isAnonymous = Boolean(user.is_anonymous);
-    const role = (user.app_metadata as any)?.role || 'user';
+    const isAnonymous = Boolean(user?.is_anonymous);
+    const role = (user?.app_metadata as any)?.role || 'user';
     const isAdminRole = !isAnonymous && role === 'admin';
 
     console.log('[ADMIN AUTH] session exists: true');
-    console.log(`[ADMIN AUTH] user id: ${user.id}`);
+    console.log(`[ADMIN AUTH] user id: ${user?.id}`);
     console.log(`[ADMIN AUTH] is anonymous: ${isAnonymous}`);
     console.log(`[ADMIN AUTH] role: ${role}`);
 
