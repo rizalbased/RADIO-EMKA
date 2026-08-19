@@ -21,7 +21,9 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,19 +41,33 @@ jobs:
       - name: Install dependencies using Bun
         run: bun install --frozen-lockfile
 
+      # ==========================================
+      # BUILD APPLICATION
+      # ==========================================
       - name: Build static site with Bun
         run: bun run build
         env:
           VITE_YOUTUBE_API_KEY: ${{ secrets.VITE_YOUTUBE_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
+      # ==========================================
+      # SETUP GITHUB PAGES
+      # ==========================================
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # ==========================================
+      # UPLOAD BUILD
+      # ==========================================
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
 
+      # ==========================================
+      # DEPLOY
+      # ==========================================
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
