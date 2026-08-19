@@ -34,20 +34,18 @@ export function resetSupabaseClient(): void {
 
 export function isSupabaseConfigured(): boolean {
   return Boolean(
-    supabaseUrl && 
-    supabaseAnonKey && 
-    typeof supabaseUrl === 'string' && 
-    supabaseUrl.startsWith('http') && 
-    typeof supabaseAnonKey === 'string' && 
-    supabaseAnonKey.length > 10
+    (import.meta as any).env?.VITE_SUPABASE_URL &&
+    (import.meta as any).env?.VITE_SUPABASE_ANON_KEY
   );
 }
 
 export function printEmkaDiagnostic(): void {
   if (typeof window === 'undefined') return;
-  const urlConfigured = Boolean(supabaseUrl && supabaseUrl.startsWith('http'));
-  const keyConfigured = Boolean(supabaseAnonKey && supabaseAnonKey.length > 10);
-  console.log(`[EMKA SUPABASE]\nURL configured: ${urlConfigured}\nKEY configured: ${keyConfigured}`);
+  console.log(
+    '[EMKA SUPABASE]',
+    Boolean((import.meta as any).env?.VITE_SUPABASE_URL),
+    Boolean((import.meta as any).env?.VITE_SUPABASE_ANON_KEY)
+  );
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
