@@ -206,12 +206,11 @@ export async function connectGoogleSheet(payload: { spreadsheetId?: string; spre
 export async function fetchSongRequests(): Promise<{ requests: SongRequest[]; synced: boolean }> {
   if (isSupabaseConfigured()) {
     const { requests, isSupabase } = await fetchSongRequestsFromDb();
-    if (isSupabase && requests) {
-      saveLocalRequests(requests);
-      return { requests, synced: true };
+    if (isSupabase) {
+      return { requests: requests || [], synced: true };
     }
   }
-  return { requests: getLocalRequests(), synced: false };
+  return { requests: [], synced: false };
 }
 
 export function subscribeSongRequests(
@@ -221,63 +220,54 @@ export function subscribeSongRequests(
   // 1. Fetch initial data from Supabase immediately on mount
   if (isSupabaseConfigured()) {
     fetchSongRequestsFromDb().then(({ requests, isSupabase }) => {
-      if (isSupabase && requests) {
-        saveLocalRequests(requests);
-        onUpdate(requests);
+      if (isSupabase) {
+        onUpdate(requests || []);
       }
     });
   } else {
-    onUpdate(getLocalRequests());
+    onUpdate([]);
   }
 
   if (isSupabaseConfigured()) {
-    console.log('[API] Subscribing to Supabase Realtime emka-radio-global-sync channel...');
+    console.log('[EMKA REALTIME] Subscribing to emka-radio-global-sync channel...');
+    let currentRequests: SongRequest[] = [];
+
     const unsubscribeSupabase = subscribeToSongRequests({
       onInsert: (newReq) => {
-        const current = getLocalRequests();
-        const exists = current.some((r) => r.id === newReq.id);
-        if (!exists) {
-          const updated = [...current, newReq].sort((a, b) => {
+        if (!currentRequests.some((r) => r.id === newReq.id)) {
+          currentRequests = [...currentRequests, newReq].sort((a, b) => {
             const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
             const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
             return tA - tB;
           });
-          saveLocalRequests(updated);
-          onUpdate(updated);
+          onUpdate(currentRequests);
         }
       },
       onUpdate: (updatedReq) => {
-        const current = getLocalRequests();
-        const idx = current.findIndex((r) => r.id === updatedReq.id);
-        let updated: SongRequest[];
+        const idx = currentRequests.findIndex((r) => r.id === updatedReq.id);
         if (idx !== -1) {
-          updated = [...current];
-          updated[idx] = updatedReq;
+          currentRequests[idx] = updatedReq;
         } else {
-          updated = [...current, updatedReq];
+          currentRequests.push(updatedReq);
         }
-        updated.sort((a, b) => {
+        currentRequests.sort((a, b) => {
           const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
           const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
           return tA - tB;
         });
-        saveLocalRequests(updated);
-        onUpdate(updated);
+        onUpdate(currentRequests);
       },
       onDelete: (deletedId) => {
-        const current = getLocalRequests();
-        const updated = current.filter((r) => r.id !== deletedId);
-        saveLocalRequests(updated);
-        onUpdate(updated);
+        currentRequests = currentRequests.filter((r) => r.id !== deletedId);
+        onUpdate(currentRequests);
       },
       onSyncAll: (allReqs) => {
-        const sorted = (allReqs || []).slice().sort((a, b) => {
+        currentRequests = (allReqs || []).slice().sort((a, b) => {
           const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
           const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
           return tA - tB;
         });
-        saveLocalRequests(sorted);
-        onUpdate(sorted);
+        onUpdate(currentRequests);
       },
       onRadioStateChange: (state) => {
         if (onRadioStateChange) {
@@ -291,13 +281,7 @@ export function subscribeSongRequests(
     };
   }
 
-  // Fallback: LocalStorage event listener
-  const listener = () => {
-    onUpdate(getLocalRequests());
-  };
-
-  window.addEventListener('storage', listener);
-  return () => window.removeEventListener('storage', listener);
+  return () => {};
 }
 
 export async function submitSongRequest(data: {
@@ -312,96 +296,24 @@ export async function submitSongRequest(data: {
   previewUrl?: string;
   youtubeVideoId?: string;
 }): Promise<{ success: boolean; request?: SongRequest; requests: SongRequest[]; error?: string }> {
-  console.log(`[REQUEST] submit title="${data.songTitle.trim()}" artist="${data.artist.trim()}"`);
+  console.log(`[EMKA REQUEST] submit title="${data.songTitle.trim()}" artist="${data.artist.trim()}"`);
 
-  if (isSupabaseConfigured()) {
-    const result = await insertSongRequest(data);
-    if (!result.success) {
-      return {
-        success: false,
-        error: result.error || 'Gagal mengirim request lagu.',
-        requests: getLocalRequests()
-      };
-    }
-
-    if (result.request) {
-      const current = getLocalRequests();
-      if (!current.some((r) => r.id === result.request!.id)) {
-        current.push(result.request);
-        saveLocalRequests(current);
-      }
-      return { success: true, request: result.request, requests: current };
-    }
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase tidak dikonfigurasi.', requests: [] };
   }
 
-  // Fallback if Supabase is not configured yet
-  const normTitle = data.songTitle.trim().toLowerCase();
-  const normArtist = data.artist.trim().toLowerCase();
-  const cleanVideoId = data.youtubeVideoId && data.youtubeVideoId.trim().length === 11 ? data.youtubeVideoId.trim() : null;
-
-  const current = getLocalRequests();
-
-  // Duplicate Check against currently Playing track
-  const currentlyPlaying = current.find(r => r.status === 'Playing');
-  if (currentlyPlaying) {
-    const isPlayingMatch = (cleanVideoId && currentlyPlaying.youtubeVideoId === cleanVideoId) ||
-      (currentlyPlaying.songTitle.trim().toLowerCase() === normTitle && currentlyPlaying.artist.trim().toLowerCase() === normArtist);
-    
-    if (isPlayingMatch) {
-      console.warn('[QUEUE] duplicate check: rejected (Lagu sedang diputar)');
-      return {
-        success: false,
-        error: 'Lagu sedang diputar.',
-        requests: current
-      };
-    }
-  }
-
-  // Duplicate Check against Queued tracks
-  const alreadyQueued = current.find(r => {
-    if (r.status !== 'Queued') return false;
-    if (cleanVideoId && r.youtubeVideoId === cleanVideoId) return true;
-    return r.songTitle.trim().toLowerCase() === normTitle && r.artist.trim().toLowerCase() === normArtist;
-  });
-
-  if (alreadyQueued) {
-    console.warn('[QUEUE] duplicate check: rejected (Lagu ini sudah ada di antrean)');
+  const result = await insertSongRequest(data);
+  if (!result.success || !result.request) {
     return {
       success: false,
-      error: 'Lagu ini sudah ada di antrean.',
-      requests: current
+      error: result.error || 'Gagal mengirim request lagu ke database Supabase.',
+      requests: []
     };
   }
 
-  console.log('[QUEUE] duplicate check: passed');
-
-  const id = `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const nowIso = new Date().toISOString();
-
-  const newRequest: SongRequest = {
-    id,
-    timestamp: nowIso,
-    studentName: data.studentName.trim(),
-    className: data.className.trim(),
-    songTitle: data.songTitle.trim(),
-    artist: data.artist.trim(),
-    targetPerson: data.targetPerson ? data.targetPerson.trim() : 'Semua Teman',
-    message: data.message ? data.message.trim() : 'Salam hangat!',
-    mood: (data.mood as MoodTag) || '🎧 Vibe Check',
-    coverUrl: data.coverUrl || (cleanVideoId ? `https://i.ytimg.com/vi/${cleanVideoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'),
-    previewUrl: data.previewUrl || '',
-    status: 'Queued',
-    likes: 0,
-    youtubeVideoId: cleanVideoId || undefined
-  };
-
-  console.log(`[QUEUE] enqueue requestId="${newRequest.id}" videoId="${newRequest.youtubeVideoId || 'none'}"`);
-
-  current.push(newRequest);
-  saveLocalRequests(current);
-  console.log(`[QUEUE] added total=${current.length}`);
-
-  return { success: true, request: newRequest, requests: current };
+  // Fetch latest requests from Supabase DB to ensure state is in sync
+  const { requests } = await fetchSongRequestsFromDb();
+  return { success: true, request: result.request, requests: requests || [result.request] };
 }
 
 export async function updateRequestStatus(requestId: string, status: 'Queued' | 'Playing' | 'Played'): Promise<{ success: boolean; requests: SongRequest[] }> {
