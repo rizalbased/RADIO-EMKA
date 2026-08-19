@@ -20,6 +20,7 @@ import { MiniPlayer } from './components/MiniPlayer';
 import { AccessLandingView } from './components/AccessLandingView';
 
 import { SongRequest, SheetConfig, RadioHost } from './types';
+import { ensureAnonymousSession } from './lib/supabaseClient';
 import {
   fetchSheetConfig,
   fetchSongRequests,
@@ -153,9 +154,12 @@ export default function App() {
     }
   };
 
-  // Load initial data and bind Realtime Firestore Listeners
+  // Load initial data and bind Realtime Listeners
   useEffect(() => {
     setIsSyncing(true);
+
+    // Initialize Supabase anonymous user session in background
+    ensureAnonymousSession().catch(() => {});
 
     // Initial Sheet config load
     fetchSheetConfig()

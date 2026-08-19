@@ -34,6 +34,7 @@ export function getSupabaseClient(): SupabaseClient | null {
         }
       }
     });
+    console.log('[SUPABASE] client initialized');
   }
   return clientInstance;
 }
@@ -55,6 +56,7 @@ export async function ensureAnonymousSession(): Promise<string | null> {
       // 1. Check existing session
       const { data: sessionData, error: sessionErr } = await client.auth.getSession();
       if (!sessionErr && sessionData?.session?.user?.id) {
+        console.log('[SUPABASE] anonymous session ready');
         return sessionData.session.user.id;
       }
 
@@ -62,19 +64,22 @@ export async function ensureAnonymousSession(): Promise<string | null> {
       if (typeof client.auth.signInAnonymously === 'function') {
         const { data: anonData, error: anonErr } = await client.auth.signInAnonymously();
         if (!anonErr && anonData?.user?.id) {
-          console.log('[SUPABASE AUTH] Anonymous session initialized:', anonData.user.id);
+          console.log('[SUPABASE] anonymous session ready');
           return anonData.user.id;
         }
         if (anonErr) {
-          console.warn('[SUPABASE AUTH] Anonymous sign-in error:', anonErr.message);
+          console.warn('[SUPABASE] Anonymous sign-in error:', anonErr.message);
         }
       }
 
       // 3. Fallback: retrieve current user or return null
       const { data: userData } = await client.auth.getUser();
+      if (userData?.user?.id) {
+        console.log('[SUPABASE] anonymous session ready');
+      }
       return userData?.user?.id || null;
     } catch (err) {
-      console.warn('[SUPABASE AUTH] Auth initialization exception:', err);
+      console.warn('[SUPABASE] Auth initialization exception:', err);
       return null;
     } finally {
       anonymousAuthPromise = null;

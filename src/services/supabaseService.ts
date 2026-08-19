@@ -52,12 +52,12 @@ export function subscribeToSongRequests(callbacks: {
   }
 
   const channel = client
-    .channel('public:song_requests')
+    .channel('emka-radio-song-requests')
     .on(
       'postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'song_requests' },
       (payload) => {
-        console.log('[SUPABASE REALTIME] INSERT detected:', payload.new?.id);
+        console.log('[SUPABASE] realtime INSERT:', payload.new?.id);
         if (payload.new) {
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
@@ -68,7 +68,7 @@ export function subscribeToSongRequests(callbacks: {
       'postgres_changes',
       { event: 'UPDATE', schema: 'public', table: 'song_requests' },
       (payload) => {
-        console.log('[SUPABASE REALTIME] UPDATE detected:', payload.new?.id, payload.new?.status);
+        console.log('[SUPABASE] realtime UPDATE:', payload.new?.id, payload.new?.status);
         if (payload.new) {
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
@@ -79,22 +79,22 @@ export function subscribeToSongRequests(callbacks: {
       'postgres_changes',
       { event: 'DELETE', schema: 'public', table: 'song_requests' },
       (payload) => {
-        console.log('[SUPABASE REALTIME] DELETE detected:', payload.old?.id);
+        console.log('[SUPABASE] realtime DELETE:', payload.old?.id);
         if (payload.old?.id) {
           callbacks.onDelete?.(payload.old.id);
         }
       }
     )
     .subscribe((status, err) => {
-      console.log('[SUPABASE REALTIME] Channel status:', status);
       if (status === 'SUBSCRIBED') {
+        console.log('[SUPABASE] realtime connected');
         // Refresh entire list on initial subscription or reconnection
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
         });
       }
       if (err) {
-        console.warn('[SUPABASE REALTIME] Subscription error:', err);
+        console.warn('[SUPABASE] realtime error:', err);
       }
     });
 
@@ -190,7 +190,7 @@ export async function insertSongRequest(data: {
     }
 
     const mapped = mapDbRequestToSongRequest(inserted as DbSongRequest);
-    console.log('[SUPABASE REQUEST] Insert successful:', mapped.id);
+    console.log('[SUPABASE] request inserted:', mapped.id);
     return { success: true, request: mapped };
   } catch (err: any) {
     console.error('[SUPABASE REQUEST] Exception during insert:', err);
