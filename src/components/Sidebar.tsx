@@ -109,7 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${
                     isActive ? 'bg-black text-[#B6FF00]' : 'bg-elevated text-secondary border border-subtle'
                   }`}>
-                    {requests.filter(r => r.status === 'Queued').length}
+                    {requests.filter(r => r.status === 'Queued' || r.status === 'pending').length}
                   </span>
                 )}
               </button>

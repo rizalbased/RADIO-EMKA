@@ -20,7 +20,7 @@ import { MiniPlayer } from './components/MiniPlayer';
 import { AccessLandingView } from './components/AccessLandingView';
 
 import { SongRequest, SheetConfig, RadioHost } from './types';
-import { ensureAnonymousSession } from './lib/supabaseClient';
+import { ensureAnonymousSession, getAdminSessionStatus } from './lib/supabaseClient';
 import {
   fetchSheetConfig,
   fetchSongRequests,
@@ -35,7 +35,8 @@ import {
   fetchRadioHosts,
   subscribeRadioHosts,
   updateRadioHosts,
-  loginAdmin
+  loginAdmin,
+  logoutAdmin
 } from './services/api';
 
 import {
@@ -94,45 +95,42 @@ export default function App() {
 
   // Check URL query parameters or localStorage for role mode on initial mount
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    async function initSessionAndRole() {
+      if (typeof window === 'undefined') return;
+
       const params = new URLSearchParams(window.location.search);
       const urlMode = params.get('mode') || params.get('role');
-      const isAdminAuth = localStorage.getItem('fm_admin_authenticated') === 'true';
       const isChosen = localStorage.getItem('fm_access_chosen') === 'true';
       const savedRole = localStorage.getItem('fm_user_role') as 'user' | 'admin' | null;
 
-      if (urlMode === 'admin') {
-        if (isAdminAuth) {
+      // Verify Supabase Auth Session
+      const adminStatus = await getAdminSessionStatus();
+
+      if (urlMode === 'admin' || (isChosen && savedRole === 'admin')) {
+        if (adminStatus.isAdmin) {
           setUserRole('admin');
           setActiveTab('player');
           setIsAccessChosen(true);
         } else {
-          // Open PIN gate
+          // If admin requested but not authenticated with admin role, show PIN modal or landing
           setIsAccessChosen(false);
+          setIsAdminPinModalOpen(true);
         }
-      } else if (urlMode === 'user' || urlMode === 'student') {
+      } else if (urlMode === 'user' || urlMode === 'student' || (isChosen && savedRole === 'user')) {
         setUserRole('user');
         setActiveTab('feed');
         setIsAccessChosen(true);
         localStorage.setItem('fm_access_chosen', 'true');
         localStorage.setItem('fm_user_role', 'user');
-      } else if (isChosen) {
-        if (savedRole === 'admin' && isAdminAuth) {
-          setUserRole('admin');
-          setActiveTab('player');
-          setIsAccessChosen(true);
-        } else if (savedRole === 'user') {
-          setUserRole('user');
-          setActiveTab('feed');
-          setIsAccessChosen(true);
-        } else {
-          setIsAccessChosen(false);
-        }
+        ensureAnonymousSession().catch(() => {});
       } else {
         // First time opening: Show welcome access selection screen
         setIsAccessChosen(false);
+        ensureAnonymousSession().catch(() => {});
       }
     }
+
+    initSessionAndRole();
   }, []);
 
   // Manual refresh handler for UI buttons
@@ -279,6 +277,7 @@ export default function App() {
     localStorage.setItem('fm_access_chosen', 'true');
     localStorage.setItem('fm_user_role', 'user');
     setActiveTab('feed');
+    ensureAnonymousSession().catch(() => {});
   };
 
   // Admin PIN Login Success (PIN 1902)
@@ -294,9 +293,8 @@ export default function App() {
 
   // Logout Admin / Switch Role -> Returns to Welcome Landing Page
   const handleLogoutOrSwitchRole = () => {
-    if (userRole === 'admin') {
-      localStorage.removeItem('fm_admin_authenticated');
-    }
+    logoutAdmin();
+    localStorage.removeItem('fm_admin_authenticated');
     localStorage.removeItem('fm_access_chosen');
     localStorage.removeItem('fm_user_role');
     setIsAccessChosen(false);

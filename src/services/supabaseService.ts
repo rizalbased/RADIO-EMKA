@@ -1,36 +1,74 @@
-import { getSupabaseClient, isSupabaseConfigured, ensureAnonymousSession } from '../lib/supabaseClient';
+import {
+  getSupabaseClient,
+  isSupabaseConfigured,
+  ensureAnonymousSession,
+  getAdminSessionStatus,
+  loginAdminToSupabase,
+  logoutAdminFromSupabase
+} from '../lib/supabaseClient';
 import { SongRequest, DbSongRequest, mapDbRequestToSongRequest, MoodTag } from '../types';
 
 let realtimeChannel: any = null;
+let lastAdminQueueError: { code?: string; message: string } | null = null;
 
-export async function fetchSongRequestsFromDb(): Promise<{ requests: SongRequest[]; isSupabase: boolean }> {
+export function getLastAdminQueueError() {
+  return lastAdminQueueError;
+}
+
+export async function fetchSongRequestsFromDb(): Promise<{
+  requests: SongRequest[];
+  isSupabase: boolean;
+  error?: { code?: string; message: string };
+}> {
   const client = getSupabaseClient();
   if (!client) {
     return { requests: [], isSupabase: false };
   }
 
   try {
+    // 1. Diagnostics logging
+    const { data: { session }, error: sessionErr } = await client.auth.getSession();
+    const sessionExists = Boolean(!sessionErr && session && session.user);
+    const userId = session?.user?.id || 'none';
+    const isAnonymous = Boolean(session?.user?.is_anonymous);
+    const role = (session?.user?.app_metadata as any)?.role || (isAnonymous ? 'anonymous' : 'authenticated');
+
+    console.log(`[ADMIN AUTH] session exists: ${sessionExists}`);
+    console.log(`[ADMIN AUTH] user id: ${userId}`);
+    console.log(`[ADMIN AUTH] is anonymous: ${isAnonymous}`);
+    console.log(`[ADMIN AUTH] role: ${role}`);
+    console.log('[ADMIN QUEUE] fetching requests...');
+
+    // 2. Fetch song_requests ordered by created_at ascending (FIFO)
     const { data, error } = await client
       .from('song_requests')
       .select('*')
-      .order('created_at', { ascending: true }); // Strict FIFO
+      .order('created_at', { ascending: true });
 
     if (error) {
-      console.warn('[SUPABASE] Fetch song_requests error:', error.message);
-      return { requests: [], isSupabase: true };
+      lastAdminQueueError = { code: error.code, message: error.message };
+      console.error('[ADMIN QUEUE ERROR]', error);
+      console.error(`[ADMIN QUEUE ERROR] code: ${error.code} message: ${error.message}`);
+      return { requests: [], isSupabase: true, error: { code: error.code, message: error.message } };
     }
+
+    lastAdminQueueError = null;
+    const requestCount = data ? data.length : 0;
+    console.log(`[ADMIN QUEUE] request count: ${requestCount}`);
 
     const mapped = (data || []).map((row: DbSongRequest) => mapDbRequestToSongRequest(row));
     return { requests: mapped, isSupabase: true };
-  } catch (err) {
-    console.warn('[SUPABASE] Fetch exception:', err);
-    return { requests: [], isSupabase: false };
+  } catch (err: any) {
+    const errMsg = err?.message || 'Unknown fetch exception';
+    lastAdminQueueError = { message: errMsg };
+    console.error('[ADMIN QUEUE ERROR]', err);
+    return { requests: [], isSupabase: false, error: { message: errMsg } };
   }
 }
 
 /**
  * Subscribes to Supabase Realtime changes on song_requests table.
- * Strictly single subscription instance with clean teardown.
+ * Uses channel 'admin-song-requests'. Strictly single subscription instance with clean teardown.
  */
 export function subscribeToSongRequests(callbacks: {
   onInsert?: (newReq: SongRequest) => void;
@@ -43,7 +81,7 @@ export function subscribeToSongRequests(callbacks: {
     return () => {};
   }
 
-  // Remove existing channel if already active
+  // Remove existing channel if already active to prevent duplicates
   if (realtimeChannel) {
     try {
       client.removeChannel(realtimeChannel);
@@ -52,35 +90,25 @@ export function subscribeToSongRequests(callbacks: {
   }
 
   const channel = client
-    .channel('emka-radio-song-requests')
+    .channel('admin-song-requests')
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'song_requests' },
+      {
+        event: '*',
+        schema: 'public',
+        table: 'song_requests'
+      },
       (payload) => {
-        console.log('[SUPABASE] realtime INSERT:', payload.new?.id);
-        if (payload.new) {
+        if (payload.eventType === 'INSERT' && payload.new) {
+          console.log('[SUPABASE] realtime INSERT:', payload.new.id);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
-        }
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'song_requests' },
-      (payload) => {
-        console.log('[SUPABASE] realtime UPDATE:', payload.new?.id, payload.new?.status);
-        if (payload.new) {
+        } else if (payload.eventType === 'UPDATE' && payload.new) {
+          console.log('[SUPABASE] realtime UPDATE:', payload.new.id, payload.new.status);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
-        }
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: 'DELETE', schema: 'public', table: 'song_requests' },
-      (payload) => {
-        console.log('[SUPABASE] realtime DELETE:', payload.old?.id);
-        if (payload.old?.id) {
+        } else if (payload.eventType === 'DELETE' && payload.old) {
+          console.log('[SUPABASE] realtime DELETE:', payload.old.id);
           callbacks.onDelete?.(payload.old.id);
         }
       }
@@ -88,7 +116,7 @@ export function subscribeToSongRequests(callbacks: {
     .subscribe((status, err) => {
       if (status === 'SUBSCRIBED') {
         console.log('[SUPABASE] realtime connected');
-        // Refresh entire list on initial subscription or reconnection
+        // Initial fetch on connection to guarantee no stale queue state
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
         });

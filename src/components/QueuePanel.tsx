@@ -8,10 +8,12 @@ import {
   Clock,
   Sparkles,
   Heart,
-  Disc
+  Disc,
+  AlertTriangle
 } from 'lucide-react';
 import { SongRequest } from '../types';
 import { useRadioEngine } from '../contexts/RadioEngineContext';
+import { getLastAdminQueueError } from '../services/api';
 
 interface QueuePanelProps {
   requests: SongRequest[];
@@ -30,17 +32,18 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
 }) => {
   const { ytPlayerState, playQueueTrack } = useRadioEngine();
   const isPlaying = ytPlayerState === 1;
+  const adminQueueError = getLastAdminQueueError();
 
   // Strict FIFO: sort queued requests by oldest timestamp first
   const queuedRequests = requests
-    .filter((r) => r.status === 'Queued')
+    .filter((r) => r.status === 'Queued' || r.status === 'pending')
     .sort((a, b) => {
       const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return timeA - timeB;
     });
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
+  const playingTrack = requests.find((r) => r.status === 'Playing' || r.status === 'playing');
 
   const handlePlayNow = async (req: SongRequest) => {
     await playQueueTrack(req);
@@ -70,6 +73,20 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
           </button>
         )}
       </div>
+
+      {/* RLS / Diagnostic Error Banner */}
+      {adminQueueError && (
+        <div className="mt-3 p-3 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-bold space-y-1">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <span className="font-mono uppercase">[ADMIN QUEUE ERROR]</span>
+          </div>
+          <p className="font-mono text-[11px]">
+            {adminQueueError.code ? `code: ${adminQueueError.code} ` : ''}
+            message: {adminQueueError.message}
+          </p>
+        </div>
+      )}
 
       {/* SEDANG DIPUTAR (NOW PLAYING) */}
       <div className="pt-4 pb-2 space-y-2">

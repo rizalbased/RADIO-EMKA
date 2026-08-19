@@ -7,9 +7,17 @@ import {
   deleteDbSongRequest,
   clearAllDbSongRequests,
   likeDbSongRequest,
-  updateDbRequestVideoId
+  updateDbRequestVideoId,
+  getLastAdminQueueError
 } from './supabaseService';
-import { isSupabaseConfigured } from '../lib/supabaseClient';
+import {
+  isSupabaseConfigured,
+  getAdminSessionStatus,
+  loginAdminToSupabase,
+  logoutAdminFromSupabase
+} from '../lib/supabaseClient';
+
+export { getLastAdminQueueError, getAdminSessionStatus, loginAdminToSupabase, logoutAdminFromSupabase };
 
 // LocalStorage Keys for resilient offline/cached data
 const STORAGE_KEYS = {
@@ -641,20 +649,44 @@ export function checkAdminAuth(): boolean {
   return localStorage.getItem(STORAGE_KEYS.ADMIN_AUTH) === 'true';
 }
 
-export async function loginAdmin(pin: string): Promise<{ success: boolean; error?: string }> {
-  if (pin === '1077' || pin === 'admin' || pin === '1234') {
+export async function loginAdmin(
+  pinOrEmail: string,
+  password?: string
+): Promise<{ success: boolean; error?: string }> {
+  // If email and password provided, log in directly to Supabase Auth
+  if (password !== undefined) {
+    const res = await loginAdminToSupabase(pinOrEmail, password);
+    if (res.success) {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
+      }
+      return { success: true };
+    }
+    return { success: false, error: res.error || 'Login admin gagal.' };
+  }
+
+  // If 4-digit PIN entered (1902, 1077, etc.)
+  const pin = pinOrEmail.trim();
+  if (pin === '1902' || pin === '1077' || pin === 'admin' || pin === '1234') {
+    // Attempt Supabase Admin Auth
+    const res = await loginAdminToSupabase();
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
     }
+    if (!res.success) {
+      console.warn('[ADMIN AUTH] Note: Supabase sign in with default credentials returned:', res.error);
+    }
     return { success: true };
   }
-  return { success: false, error: 'PIN Admin salah! (Default PIN: 1077)' };
+
+  return { success: false, error: 'PIN Admin salah! (Default PIN: 1902)' };
 }
 
 export function logoutAdmin(): void {
   if (typeof window !== 'undefined') {
     localStorage.removeItem(STORAGE_KEYS.ADMIN_AUTH);
   }
+  logoutAdminFromSupabase().catch(() => {});
 }
 
 // -------------------------------------------------------------

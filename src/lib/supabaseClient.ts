@@ -88,3 +88,131 @@ export async function ensureAnonymousSession(): Promise<string | null> {
 
   return anonymousAuthPromise;
 }
+
+/**
+ * Checks current Supabase Auth session for Admin authorization.
+ * Admin must have a valid non-anonymous session with app_metadata.role === 'admin'.
+ */
+export async function getAdminSessionStatus(): Promise<{
+  sessionExists: boolean;
+  isAdmin: boolean;
+  isAnonymous: boolean;
+  userId: string | null;
+  role: string | null;
+  error?: string;
+}> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      sessionExists: false,
+      isAdmin: false,
+      isAnonymous: false,
+      userId: null,
+      role: null
+    };
+  }
+
+  try {
+    const { data: { session }, error } = await client.auth.getSession();
+    if (error || !session || !session.user) {
+      return {
+        sessionExists: false,
+        isAdmin: false,
+        isAnonymous: false,
+        userId: null,
+        role: null,
+        error: error?.message
+      };
+    }
+
+    const user = session.user;
+    const isAnonymous = Boolean(user.is_anonymous);
+    const appRole = (user.app_metadata as any)?.role || null;
+    const isAdmin = !isAnonymous && appRole === 'admin';
+
+    return {
+      sessionExists: true,
+      isAdmin,
+      isAnonymous,
+      userId: user.id,
+      role: appRole || (isAnonymous ? 'anonymous' : 'user')
+    };
+  } catch (err: any) {
+    return {
+      sessionExists: false,
+      isAdmin: false,
+      isAnonymous: false,
+      userId: null,
+      role: null,
+      error: err?.message
+    };
+  }
+}
+
+/**
+ * Signs in as permanent Admin using Supabase Auth.
+ */
+export async function loginAdminToSupabase(
+  customEmail?: string,
+  customPassword?: string
+): Promise<{ success: boolean; error?: string; user?: any; isAdminRole?: boolean }> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { success: false, error: 'Supabase client not configured.' };
+  }
+
+  const email = (
+    customEmail ||
+    (import.meta as any).env?.VITE_ADMIN_EMAIL ||
+    'admin@emkaradio.sch.id'
+  ).trim();
+
+  const password = (
+    customPassword ||
+    (import.meta as any).env?.VITE_ADMIN_PASSWORD ||
+    'emkaradio1902'
+  ).trim();
+
+  try {
+    const { data, error } = await client.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) {
+      console.warn('[ADMIN AUTH] Login failed:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    const user = data.user;
+    const isAnonymous = Boolean(user.is_anonymous);
+    const role = (user.app_metadata as any)?.role || 'user';
+    const isAdminRole = !isAnonymous && role === 'admin';
+
+    console.log('[ADMIN AUTH] session exists: true');
+    console.log(`[ADMIN AUTH] user id: ${user.id}`);
+    console.log(`[ADMIN AUTH] is anonymous: ${isAnonymous}`);
+    console.log(`[ADMIN AUTH] role: ${role}`);
+
+    return { success: true, user, isAdminRole };
+  } catch (err: any) {
+    console.error('[ADMIN AUTH] Login exception:', err);
+    return { success: false, error: err?.message || 'Gagal login ke Supabase Auth.' };
+  }
+}
+
+/**
+ * Signs out admin and switches back to anonymous session.
+ */
+export async function logoutAdminFromSupabase(): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    await client.auth.signOut();
+    console.log('[ADMIN AUTH] Admin signed out');
+    await ensureAnonymousSession();
+  } catch (err: any) {
+    console.warn('[ADMIN AUTH] Sign out error:', err?.message);
+  }
+}
