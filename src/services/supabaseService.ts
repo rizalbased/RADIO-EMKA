@@ -56,14 +56,13 @@ export async function fetchSongRequestsFromDb(): Promise<{
 
     if (error) {
       lastAdminQueueError = { code: error.code, message: error.message };
-      console.error('[ADMIN QUEUE ERROR]', error);
-      console.error(`[ADMIN QUEUE ERROR] code: ${error.code} message: ${error.message}`);
+      console.error(`[EMKA ADMIN QUERY ERROR]\ncode: ${error.code}\nmessage: ${error.message}\ndetails: ${(error as any).details || null}\nhint: ${(error as any).hint || null}`);
       return { requests: [], isSupabase: true, error: { code: error.code, message: error.message } };
     }
 
     lastAdminQueueError = null;
     const requestCount = data ? data.length : 0;
-    console.log(`[ADMIN QUEUE] request count: ${requestCount}`);
+    console.log(`[EMKA ADMIN QUERY SUCCESS]\nrows: ${requestCount}`);
 
     const mapped = (data || []).map((row: DbSongRequest) => mapDbRequestToSongRequest(row));
     return { requests: mapped, isSupabase: true };
@@ -335,6 +334,8 @@ export function subscribeToSongRequests(callbacks: {
     realtimeChannel = null;
   }
 
+  console.log('[EMKA REALTIME]\nSUBSCRIBING');
+
   const channel = client
     .channel('emka-radio-global-sync')
     .on(
@@ -346,15 +347,15 @@ export function subscribeToSongRequests(callbacks: {
       },
       (payload) => {
         if (payload.eventType === 'INSERT' && payload.new) {
-          console.log('[SUPABASE] realtime INSERT:', payload.new.id);
+          console.log('[EMKA REALTIME]\nINSERT');
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
         } else if (payload.eventType === 'UPDATE' && payload.new) {
-          console.log('[SUPABASE] realtime UPDATE:', payload.new.id, payload.new.status);
+          console.log('[EMKA REALTIME]\nUPDATE');
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
         } else if (payload.eventType === 'DELETE' && payload.old) {
-          console.log('[SUPABASE] realtime DELETE:', payload.old.id);
+          console.log('[EMKA REALTIME]\nDELETE');
           callbacks.onDelete?.(payload.old.id);
         }
       }
@@ -369,14 +370,14 @@ export function subscribeToSongRequests(callbacks: {
       (payload) => {
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
-          console.log('[SUPABASE] realtime radio_state:', rawNew.status, rawNew.current_title);
+          console.log('[EMKA REALTIME]\nRADIO_STATE UPDATE');
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
     )
     .subscribe((status, err) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[SUPABASE] realtime connected to emka-radio-global-sync');
+        console.log('[EMKA REALTIME]\nSUBSCRIBED');
         // Initial fetch on connection to guarantee no stale state
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
@@ -388,7 +389,7 @@ export function subscribeToSongRequests(callbacks: {
         });
       }
       if (err) {
-        console.warn('[SUPABASE] realtime error:', err);
+        console.error('[EMKA REALTIME]\nERROR', err);
       }
     });
 
@@ -540,16 +541,7 @@ export async function insertSongRequest(data: {
       .single();
 
     if (insertErr) {
-      console.error('[REQUEST SUPABASE ERROR]', {
-        code: insertErr.code,
-        message: insertErr.message,
-        details: (insertErr as any).details,
-        hint: (insertErr as any).hint
-      });
-      console.log('[REQUEST] INSERT ERROR', {
-        code: insertErr.code,
-        message: insertErr.message
-      });
+      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: ${insertErr.code}\nmessage: ${insertErr.message}\ndetails: ${(insertErr as any).details || null}\nhint: ${(insertErr as any).hint || null}`);
 
       // Handle duplicate error from unique constraint/index
       if (
@@ -567,21 +559,28 @@ export async function insertSongRequest(data: {
     }
 
     if (!inserted || !inserted.id) {
-      console.error('[REQUEST SUPABASE ERROR]', { message: 'Database did not return inserted record' });
-      console.log('[REQUEST] INSERT ERROR', { message: 'No inserted ID returned' });
+      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: NO_ID\nmessage: Database did not return inserted record\ndetails: null\nhint: null`);
       return { success: false, error: 'Request gagal dikirim ke server.' };
     }
 
-    console.log(`[REQUEST] INSERT SUCCESS\n${inserted.id}`);
+    console.log(`[EMKA REQUEST]\nDATABASE INSERT SUCCESS\nrequest id: ${inserted.id}`);
 
-    const mapped = mapDbRequestToSongRequest(inserted as DbSongRequest);
+    // Step 5: Database Verification - Immediately SELECT back
+    const { data: verified, error: verifyErr } = await client
+      .from('song_requests')
+      .select('*')
+      .eq('id', inserted.id)
+      .single();
+
+    if (verifyErr || !verified) {
+      console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: ${verifyErr?.code || 'VERIFICATION_FAILED'}\nmessage: ${verifyErr?.message || 'Data tidak ditemukan setelah insert'}\ndetails: ${(verifyErr as any)?.details || null}\nhint: ${(verifyErr as any)?.hint || null}`);
+      return { success: false, error: 'Request gagal: Verifikasi database tidak menemukan data lagu.' };
+    }
+
+    const mapped = mapDbRequestToSongRequest(verified as DbSongRequest);
     return { success: true, request: mapped };
   } catch (err: any) {
-    console.error('[REQUEST SUPABASE ERROR]', {
-      message: err?.message || 'Unexpected exception during insert',
-      stack: err?.stack
-    });
-    console.log('[REQUEST] INSERT ERROR', { message: err?.message });
+    console.error(`[EMKA REQUEST]\nDATABASE INSERT FAILED\ncode: EXCEPTION\nmessage: ${err?.message || 'Unexpected exception during insert'}\ndetails: null\nhint: null`);
     return { success: false, error: 'Request gagal dikirim ke server.' };
   }
 }

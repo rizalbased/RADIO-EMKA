@@ -20,7 +20,7 @@ import { MiniPlayer } from './components/MiniPlayer';
 import { AccessLandingView } from './components/AccessLandingView';
 
 import { SongRequest, SheetConfig, RadioHost, DbRadioState } from './types';
-import { ensureAnonymousSession, getAdminSessionStatus } from './lib/supabaseClient';
+import { ensureAnonymousSession, getAdminSessionStatus, printEmkaDiagnostic } from './lib/supabaseClient';
 import {
   fetchSheetConfig,
   fetchSongRequests,
@@ -155,6 +155,7 @@ export default function App() {
 
   // Load initial data and bind Realtime Listeners
   useEffect(() => {
+    printEmkaDiagnostic();
     setIsSyncing(true);
 
     // Initialize Supabase anonymous user session in background

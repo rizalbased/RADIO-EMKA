@@ -43,12 +43,17 @@ export function isSupabaseConfigured(): boolean {
   );
 }
 
+export function printEmkaDiagnostic(): void {
+  if (typeof window === 'undefined') return;
+  const configured = isSupabaseConfigured();
+  console.log('[EMKA DIAGNOSTIC]\nSupabase URL configured:', configured, '\nSupabase client:', configured ? 'initialized' : 'not initialized', '\nCurrent origin:', window.location.origin);
+}
+
 export function getSupabaseClient(): SupabaseClient | null {
   if (!isSupabaseConfigured()) {
     return null;
   }
   if (!clientInstance) {
-    console.log(`[SUPABASE] Initializing client with sanitized URL: ${supabaseUrl}`);
     clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
@@ -64,14 +69,14 @@ export function getSupabaseClient(): SupabaseClient | null {
         }
       }
     });
-    console.log('[SUPABASE] client initialized');
+    printEmkaDiagnostic();
   }
   return clientInstance;
 }
 
 /**
  * Ensures a single anonymous session per browser/user.
- * Never prompts the user for login or credentials.
+ * Logs [EMKA AUTH] authenticated, anonymous, user id.
  */
 export async function ensureAnonymousSession(): Promise<string | null> {
   const client = getSupabaseClient();
@@ -85,31 +90,25 @@ export async function ensureAnonymousSession(): Promise<string | null> {
     try {
       // 1. Check existing session
       const { data: sessionData, error: sessionErr } = await client.auth.getSession();
-      if (!sessionErr && sessionData?.session?.user?.id) {
-        console.log('[SUPABASE] anonymous session ready');
-        return sessionData.session.user.id;
-      }
-
-      // 2. If no session, sign in anonymously
-      if (typeof client.auth.signInAnonymously === 'function') {
-        const { data: anonData, error: anonErr } = await client.auth.signInAnonymously();
-        if (!anonErr && anonData?.user?.id) {
-          console.log('[SUPABASE] anonymous session ready');
-          return anonData.user.id;
-        }
-        if (anonErr) {
-          console.warn('[SUPABASE] Anonymous sign-in error:', anonErr.message);
+      if (!sessionErr && !sessionData?.session) {
+        // Sign in anonymously if no session exists
+        if (typeof client.auth.signInAnonymously === 'function') {
+          await client.auth.signInAnonymously();
         }
       }
 
-      // 3. Fallback: retrieve current user or return null
+      // 2. Retrieve user
       const { data: userData } = await client.auth.getUser();
-      if (userData?.user?.id) {
-        console.log('[SUPABASE] anonymous session ready');
-      }
-      return userData?.user?.id || null;
-    } catch (err) {
-      console.warn('[SUPABASE] Auth initialization exception:', err);
+      const user = userData?.user;
+      const isAuthenticated = Boolean(user?.id);
+      const isAnon = Boolean(user?.is_anonymous);
+      const userId = user?.id || 'none';
+
+      console.log(`[EMKA AUTH]\nauthenticated: ${isAuthenticated}\nanonymous: ${isAnon}\nuser id: ${userId}`);
+
+      return user?.id || null;
+    } catch (err: any) {
+      console.warn('[EMKA AUTH] Exception:', err?.message || err);
       return null;
     } finally {
       anonymousAuthPromise = null;
