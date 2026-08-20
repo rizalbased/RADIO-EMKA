@@ -203,9 +203,15 @@ export const RadioEngineProvider: React.FC<{
     if (ytMutedRef.current) controller.setMuted(true);
     else controller.setMuted(false);
 
-    const targetVid = ytVideoIdRef.current;
-    if (targetVid) {
-      controller.loadVideo(targetVid);
+    const state = radioStateRef.current;
+    if (state && state.status === 'playing' && state.current_request_id && state.current_video_id) {
+      const validId = extractValidYouTubeId(state.current_video_id);
+      if (validId) {
+        currentLoadedIdRef.current = validId;
+        setYtVideoId(validId);
+        ytVideoIdRef.current = validId;
+        controller.loadVideo(validId);
+      }
     }
   }, []);
 
@@ -244,11 +250,56 @@ export const RadioEngineProvider: React.FC<{
   useEffect(() => { onUpdateStatusRef.current = onUpdateStatus; }, [onUpdateStatus]);
   useEffect(() => { requestsRef.current = requests; }, [requests]);
 
-  // Sync prop changes for radioState
+  // Sync prop changes for radioState across all devices
   useEffect(() => {
-    if (radioStateProp) {
+    if (radioStateProp !== undefined) {
       setRadioState(radioStateProp);
       radioStateRef.current = radioStateProp;
+
+      const state = radioStateProp;
+      if (!state || state.status === 'standby' || !state.current_request_id || !state.current_video_id) {
+        console.log('[RADIO ENGINE] Standby state / no active track');
+        if (playerControllerRef.current) {
+          try {
+            playerControllerRef.current.pause();
+          } catch {}
+        }
+        setYtVideoId(null);
+        setActiveTrackMetadata(null);
+        setYtCurrentTime(0);
+        setYtDuration(0);
+        currentLoadedIdRef.current = null;
+        ytVideoIdRef.current = null;
+      } else if (state.status === 'playing' && state.current_video_id && state.current_request_id) {
+        const validId = extractValidYouTubeId(state.current_video_id);
+        if (validId) {
+          if (currentLoadedIdRef.current !== validId) {
+            console.log('[RADIO ENGINE] Synchronizing video playback from radio_state:', validId);
+            setYtVideoId(validId);
+            ytVideoIdRef.current = validId;
+            currentLoadedIdRef.current = validId;
+            if (playerControllerRef.current) {
+              playerControllerRef.current.loadVideo(validId);
+              playerControllerRef.current.play();
+            }
+          }
+
+          setActiveTrackMetadata({
+            videoId: validId,
+            title: state.current_title || 'EMKA Radio Track',
+            channelTitle: state.current_channel_title || 'EMKA FM',
+            thumbnail: state.current_thumbnail_url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
+            duration: 0,
+            currentTime: 0
+          });
+        }
+      } else if (state.status === 'paused') {
+        if (playerControllerRef.current) {
+          try {
+            playerControllerRef.current.pause();
+          } catch {}
+        }
+      }
     }
   }, [radioStateProp]);
 
@@ -261,10 +312,12 @@ export const RadioEngineProvider: React.FC<{
           console.log('[RADIO STATE] Initial load:', state.status, state.current_title);
           setRadioState(state);
           radioStateRef.current = state;
-          if (state.current_video_id) {
+          if (state.status === 'playing' && state.current_video_id && state.current_request_id) {
             const validId = extractValidYouTubeId(state.current_video_id);
             if (validId) {
               setYtVideoId(validId);
+              ytVideoIdRef.current = validId;
+              currentLoadedIdRef.current = validId;
               setActiveTrackMetadata({
                 videoId: validId,
                 title: state.current_title || 'EMKA Radio Standby',
@@ -277,6 +330,10 @@ export const RadioEngineProvider: React.FC<{
                 playerControllerRef.current.loadVideo(validId);
               }
             }
+          } else {
+            setYtVideoId(null);
+            setActiveTrackMetadata(null);
+            currentLoadedIdRef.current = null;
           }
         }
       } catch (e) {
@@ -388,8 +445,8 @@ export const RadioEngineProvider: React.FC<{
         setYtCurrentTime(0);
         setYtDuration(0);
         currentLoadedIdRef.current = null;
-        if (playerRef.current && playerReadyRef.current) {
-          try { playerRef.current.pauseVideo(); } catch {}
+        if (playerControllerRef.current) {
+          try { playerControllerRef.current.pause(); } catch {}
         }
       }
     } catch (e) {

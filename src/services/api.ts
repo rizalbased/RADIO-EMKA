@@ -258,6 +258,8 @@ export function subscribeSongRequests(
         onUpdate(currentRequests);
       },
       onDelete: (deletedId) => {
+        if (!deletedId) return;
+        console.log('[QUEUE REALTIME] DELETE', deletedId);
         currentRequests = currentRequests.filter((r) => r.id !== deletedId);
         onUpdate(currentRequests);
       },
@@ -427,15 +429,24 @@ export async function likeRequest(requestId: string): Promise<{ success: boolean
   return { success: true, likes: newLikes };
 }
 
-export async function deleteSongRequest(requestId: string): Promise<{ success: boolean; requests: SongRequest[] }> {
+export async function deleteSongRequest(requestId: string): Promise<boolean> {
+  if (!requestId) {
+    console.error('[QUEUE DELETE] Missing request ID');
+    return false;
+  }
+
   if (isSupabaseConfigured()) {
-    await deleteDbSongRequest(requestId);
+    const success = await deleteDbSongRequest(requestId);
+    if (!success) {
+      console.error('[QUEUE DELETE] Supabase delete failed for ID:', requestId);
+      return false;
+    }
   }
 
   const current = getLocalRequests().filter(r => r.id !== requestId);
   saveLocalRequests(current);
   window.dispatchEvent(new Event('storage'));
-  return { success: true, requests: current };
+  return true;
 }
 
 export async function clearAllSongRequests(): Promise<{ success: boolean; requests: SongRequest[] }> {

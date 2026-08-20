@@ -51,20 +51,32 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
     handleNextRequest,
     playQueueTrack,
     setYtVolume,
-    isMasterTab
+    isMasterTab,
+    radioState
   } = useRadioEngine();
 
-  // Strict FIFO: sort queued requests by oldest arrival time first
+  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+
+  const playingTrack = currentPlayingId
+    ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
+        id: currentPlayingId,
+        songTitle: radioState.current_title,
+        artist: radioState.current_channel_title || '',
+        coverUrl: radioState.current_thumbnail_url || undefined,
+        status: 'Playing'
+      } as SongRequest : undefined)
+    : undefined;
+
+  // Strict FIFO: sort queued requests by oldest arrival time first (excluding currently playing track)
   const queuedRequests = requests
-    .filter((r) => r.status === 'Queued')
+    .filter((r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId)
     .sort((a, b) => {
       const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return timeA - timeB;
     });
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
-  const isPlaying = ytPlayerState === 1;
+  const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
 
   const formatTime = (seconds: number) => {
     if (isNaN(seconds) || seconds < 0) return '0:00';

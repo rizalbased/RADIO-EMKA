@@ -66,6 +66,7 @@ export async function fetchSongRequestsFromDb(): Promise<{
     lastAdminQueueError = null;
     const requestCount = data ? data.length : 0;
     console.log(`[EMKA ADMIN QUERY SUCCESS]\nrows: ${requestCount}`);
+    console.log('[QUEUE LOAD]', requestCount);
 
     const mapped = (data || []).map((row: DbSongRequest) => mapDbRequestToSongRequest(row));
     return { requests: mapped, isSupabase: true };
@@ -149,6 +150,7 @@ export async function updateRadioStateInDb(
 /**
  * Admin action: Play a song request.
  * Updates song_requests (status = playing) and radio_state (id = 1, status = playing).
+ * Stores request.id to radio_state.current_request_id.
  */
 export async function setAdminPlaySong(req: {
   id: string;
@@ -161,6 +163,7 @@ export async function setAdminPlaySong(req: {
   thumbnail_url?: string;
   coverUrl?: string;
 }): Promise<{ success: boolean; error?: string }> {
+  console.log('[PLAY REQUEST]', req.id);
   const client = getSupabaseClient();
   if (!client) return { success: false, error: 'Supabase client not configured' };
 
@@ -200,6 +203,9 @@ export async function setAdminPlaySong(req: {
 
     if (stateErr) {
       console.warn('[RADIO STATE] Play state update warning:', stateErr.message);
+    } else {
+      console.log('[CURRENT REQUEST]', req.id);
+      console.log('[RADIO STATE] playing');
     }
 
     return { success: true };
@@ -213,6 +219,7 @@ export async function setAdminPlaySong(req: {
  * Admin action: Pause radio.
  */
 export async function setAdminPauseRadio(): Promise<{ success: boolean; error?: string }> {
+  console.log('[RADIO STATE] paused');
   return await updateRadioStateInDb({ status: 'paused' });
 }
 
@@ -220,6 +227,7 @@ export async function setAdminPauseRadio(): Promise<{ success: boolean; error?: 
  * Admin action: Resume radio.
  */
 export async function setAdminResumeRadio(): Promise<{ success: boolean; error?: string }> {
+  console.log('[RADIO STATE] playing');
   return await updateRadioStateInDb({ status: 'playing' });
 }
 
@@ -227,6 +235,7 @@ export async function setAdminResumeRadio(): Promise<{ success: boolean; error?:
  * Standby state when no song is playing.
  */
 export async function setRadioStandbyInDb(): Promise<{ success: boolean; error?: string }> {
+  console.log('[RADIO STATE] standby');
   return await updateRadioStateInDb({
     status: 'standby',
     current_request_id: null,
@@ -239,10 +248,10 @@ export async function setRadioStandbyInDb(): Promise<{ success: boolean; error?:
 }
 
 /**
- * Handles track completion (YT.PlayerState.ENDED).
+ * Handles track completion (YT.PlayerState.ENDED) - Autoplay FIFO:
  * 1. Marks current track as 'played'.
- * 2. Fetches next pending request ordered by created_at ASC.
- * 3. If found, sets status = 'playing' in song_requests and updates radio_state.
+ * 2. Fetches next pending request directly from Supabase (ordered by created_at ASC).
+ * 3. If found, sets status = 'playing' in song_requests and updates radio_state (current_request_id = nextDb.id).
  * 4. If none found, sets radio_state status = 'standby'.
  */
 export async function handleSongEndedTransition(currentRequestId?: string | null): Promise<{
@@ -264,7 +273,7 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
         .eq('id', currentRequestId);
     }
 
-    // 2. Fetch next pending request (FIFO)
+    // 2. Fetch next pending request directly from Supabase (FIFO)
     const { data: nextRows, error: nextErr } = await client
       .from('song_requests')
       .select('*')
@@ -273,12 +282,13 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
       .limit(1);
 
     if (nextErr) {
-      console.warn('[RADIO STATE] Query next request warning:', nextErr.message);
+      console.warn('[AUTOPLAY FIFO] Query next request warning:', nextErr.message);
     }
 
     const nextDb = (nextRows && nextRows.length > 0) ? (nextRows[0] as DbSongRequest) : null;
 
     if (nextDb) {
+      console.log('[PLAY REQUEST]', nextDb.id);
       // 3. Update next request to 'playing'
       await client
         .from('song_requests')
@@ -286,6 +296,7 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
         .eq('id', nextDb.id);
 
       // 4. Update radio_state with next track
+      const nextThumb = nextDb.thumbnail_url || (nextDb.video_id ? `https://i.ytimg.com/vi/${nextDb.video_id}/hqdefault.jpg` : null);
       await client
         .from('radio_state')
         .upsert({
@@ -295,20 +306,24 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
           current_video_id: nextDb.video_id || null,
           current_title: nextDb.title || null,
           current_channel_title: nextDb.channel_title || null,
-          current_thumbnail_url: nextDb.thumbnail_url || (nextDb.video_id ? `https://i.ytimg.com/vi/${nextDb.video_id}/hqdefault.jpg` : null),
+          current_thumbnail_url: nextThumb,
           started_at: nowIso,
           updated_at: nowIso
         }, { onConflict: 'id' });
+
+      console.log('[CURRENT REQUEST]', nextDb.id);
+      console.log('[RADIO STATE] playing');
 
       const mapped = mapDbRequestToSongRequest(nextDb);
       return { success: true, nextRequest: mapped };
     } else {
       // 5. Standby mode
+      console.log('[AUTOPLAY FIFO] No pending requests. Entering standby.');
       await setRadioStandbyInDb();
       return { success: true, nextRequest: null };
     }
   } catch (err: any) {
-    console.error('[RADIO STATE] Song ended transition exception:', err);
+    console.error('[AUTOPLAY FIFO] Transition exception:', err);
     return { success: false, error: err?.message, nextRequest: null };
   }
 }
@@ -357,8 +372,14 @@ export function subscribeToSongRequests(callbacks: {
         } else if (payload.eventType === 'UPDATE' && payload.new) {
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
-        } else if (payload.eventType === 'DELETE' && payload.old) {
-          callbacks.onDelete?.(payload.old.id);
+        } else if (payload.eventType === 'DELETE') {
+          const deletedId = payload.old?.id;
+          if (deletedId) {
+            console.log('[REALTIME REQUEST DELETE]', deletedId);
+            callbacks.onDelete?.(deletedId);
+          } else {
+            console.warn('[REALTIME REQUEST DELETE] received without payload.old.id:', payload);
+          }
         }
       }
     )
@@ -372,6 +393,8 @@ export function subscribeToSongRequests(callbacks: {
       (payload) => {
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
+          console.log('[REALTIME RADIO STATE]', rawNew.current_request_id);
+          console.log('[RADIO STATE]', rawNew.status);
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
@@ -384,6 +407,8 @@ export function subscribeToSongRequests(callbacks: {
         });
         fetchRadioStateFromDb().then(({ state }) => {
           if (state) {
+            console.log('[CURRENT REQUEST]', state.current_request_id);
+            console.log('[RADIO STATE]', state.status);
             callbacks.onRadioStateChange?.(state);
           }
         });
@@ -670,32 +695,106 @@ export async function likeDbSongRequest(requestId: string): Promise<{ success: b
   }
 }
 
-export async function deleteDbSongRequest(requestId: string): Promise<{ success: boolean }> {
+export async function deleteDbSongRequest(requestId: string): Promise<boolean> {
+  if (!requestId) {
+    console.error('[DELETE REQUEST] Missing request ID');
+    return false;
+  }
+
+  console.log('[DELETE REQUEST]', requestId);
+
   const client = getSupabaseClient();
-  if (!client) return { success: false };
+  if (!client) {
+    console.error('[QUEUE DELETE] Supabase client not available');
+    return false;
+  }
 
   try {
-    const { error } = await client
+    // Check if the request being deleted is currently playing in radio_state
+    const { data: currentState } = await client
+      .from('radio_state')
+      .select('current_request_id')
+      .eq('id', 1)
+      .maybeSingle();
+
+    const isCurrentPlaying = currentState?.current_request_id === requestId;
+
+    const { data, error } = await client
       .from('song_requests')
       .delete()
+      .eq('id', requestId)
+      .select();
+
+    if (error) {
+      console.error('[QUEUE DELETE] failed:', error);
+      return false;
+    }
+
+    if (!data || data.length === 0) {
+      console.error('[QUEUE DELETE] No row deleted:', requestId);
+      return false;
+    }
+
+    // Database verification: Pastikan row benar-benar hilang dari database
+    const { data: verifyData } = await client
+      .from('song_requests')
+      .select('id')
       .eq('id', requestId);
-    return { success: !error };
-  } catch {
-    return { success: false };
+
+    if (verifyData && verifyData.length > 0) {
+      console.error('[QUEUE DELETE] DATABASE ROW STILL EXISTS', requestId);
+      return false;
+    }
+
+    // Jika lagu yang dihapus adalah current playing track, pastikan radio_state dibersihkan
+    if (isCurrentPlaying) {
+      console.log('[CURRENT REQUEST DELETE] Deleted current playing track, resetting radio_state to standby');
+      await client
+        .from('radio_state')
+        .update({
+          status: 'standby',
+          current_request_id: null,
+          current_video_id: null,
+          current_title: null,
+          current_channel_title: null,
+          current_thumbnail_url: null,
+          started_at: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', 1);
+    }
+
+    console.log('[DELETE SUCCESS]', requestId);
+    return true;
+  } catch (err) {
+    console.error('[QUEUE DELETE] Exception during delete:', err);
+    return false;
   }
 }
 
-export async function clearAllDbSongRequests(): Promise<{ success: boolean }> {
+export async function clearAllDbSongRequests(): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return { success: false };
+  if (!client) {
+    console.error('[CLEAR QUEUE] Supabase client not available');
+    return false;
+  }
 
   try {
-    const { error } = await client
+    const { data, error } = await client
       .from('song_requests')
       .delete()
-      .neq('id', '00000000-0000-0000-0000-000000000000');
-    return { success: !error };
-  } catch {
-    return { success: false };
+      .eq('status', 'pending')
+      .select();
+
+    if (error) {
+      console.error('[CLEAR QUEUE] Supabase DELETE failed:', error);
+      return false;
+    }
+
+    console.log('[CLEAR QUEUE] Cleared pending requests:', data);
+    return true;
+  } catch (err) {
+    console.error('[CLEAR QUEUE] Exception during clear:', err);
+    return false;
   }
 }

@@ -264,10 +264,43 @@ export default function App() {
     }
   };
 
-  const handleDeleteRequest = async (id: string) => {
-    const result = await deleteSongRequest(id);
-    if (result.requests) {
-      setRequests(result.requests);
+  const handleDeleteRequest = async (requestOrId: SongRequest | string) => {
+    const requestId = typeof requestOrId === 'string' ? requestOrId : requestOrId?.id;
+    if (!requestId) {
+      console.error('[QUEUE DELETE] Missing request ID');
+      return;
+    }
+
+    const reqObj = typeof requestOrId === 'object' ? requestOrId : requests.find((r) => r.id === requestId);
+    const title = reqObj?.songTitle || reqObj?.title || '';
+
+    const confirmed = window.confirm(`Hapus request${title ? ` "${title}"` : ''}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    const success = await deleteSongRequest(requestId);
+
+    if (!success) {
+      alert('Request gagal dihapus dari database.');
+      return;
+    }
+
+    console.log('[DELETE SUCCESS]', requestId);
+    setRequests((prev) => prev.filter((r) => r.id !== requestId));
+
+    // If deleted track was the currently playing track, immediately reset radioState
+    if (radioState?.current_request_id === requestId) {
+      setRadioState((prev) => prev ? {
+        ...prev,
+        status: 'standby',
+        current_request_id: null,
+        current_video_id: null,
+        current_title: null,
+        current_channel_title: null,
+        current_thumbnail_url: null,
+        started_at: null
+      } : null);
     }
   };
 
@@ -309,8 +342,22 @@ export default function App() {
     setUserRole('user');
   };
 
-  const currentlyPlayingTrack = requests.find((r) => r.status === 'Playing');
-  const queuedRequestsList = requests.filter((r) => r.status === 'Queued');
+  // Source of truth for currently playing track is radioState (id=1)
+  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+  const currentlyPlayingTrack = currentPlayingId
+    ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
+        id: currentPlayingId,
+        songTitle: radioState.current_title,
+        artist: radioState.current_channel_title || '',
+        coverUrl: radioState.current_thumbnail_url || undefined,
+        youtubeVideoId: radioState.current_video_id || undefined,
+        status: 'Playing'
+      } as SongRequest : undefined)
+    : undefined;
+
+  const queuedRequestsList = requests.filter(
+    (r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId
+  );
   const nextUpTrack = queuedRequestsList.length > 0 ? queuedRequestsList[0] : undefined;
 
   return (

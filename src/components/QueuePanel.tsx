@@ -30,20 +30,30 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   onClearAllRequests,
   onOpenStoryModal
 }) => {
-  const { ytPlayerState, playQueueTrack } = useRadioEngine();
-  const isPlaying = ytPlayerState === 1;
+  const { ytPlayerState, playQueueTrack, radioState } = useRadioEngine();
+  const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
   const adminQueueError = getLastAdminQueueError();
 
-  // Strict FIFO: sort queued requests by oldest timestamp first
+  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+
+  const playingTrack = currentPlayingId
+    ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
+        id: currentPlayingId,
+        songTitle: radioState.current_title,
+        artist: radioState.current_channel_title || '',
+        coverUrl: radioState.current_thumbnail_url || undefined,
+        status: 'Playing'
+      } as SongRequest : undefined)
+    : undefined;
+
+  // Strict FIFO: sort queued requests by oldest timestamp first (excluding currently playing track)
   const queuedRequests = requests
-    .filter((r) => r.status === 'Queued' || r.status === 'pending')
+    .filter((r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId)
     .sort((a, b) => {
       const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return timeA - timeB;
     });
-
-  const playingTrack = requests.find((r) => r.status === 'Playing' || r.status === 'playing');
 
   const handlePlayNow = async (req: SongRequest) => {
     await playQueueTrack(req);
