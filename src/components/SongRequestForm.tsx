@@ -51,6 +51,7 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<YouTubeSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
   const [showSearchResults, setShowSearchResults] = useState(false);
 
   // AI Analysis
@@ -71,6 +72,8 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
   useEffect(() => {
     if (!searchQuery || searchQuery.trim().length < 2) {
       setSearchResults([]);
+      setShowSearchResults(false);
+      setSearchError('');
       return;
     }
 
@@ -80,21 +83,31 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       setYoutubeVideoId(extractedId);
       setCoverUrl(`https://i.ytimg.com/vi/${extractedId}/hqdefault.jpg`);
       setShowSearchResults(false);
+      setSearchError('');
       return;
     }
 
     const timer = setTimeout(async () => {
       setIsSearching(true);
+      setSearchError('');
       try {
         const results = await searchYouTubeVideos(searchQuery);
         setSearchResults(results);
-        setShowSearchResults(results.length > 0);
+        if (results.length > 0) {
+          setShowSearchResults(true);
+          setSearchError('');
+        } else {
+          setShowSearchResults(false);
+          setSearchError('Gagal mencari lagu atau hasil tidak ditemukan. Silakan coba kata kunci lain.');
+        }
       } catch (err: any) {
-        console.warn('YouTube search failed:', err);
+        console.warn('[YOUTUBE SEARCH ERROR]:', err);
+        setShowSearchResults(false);
+        setSearchError('Gagal mencari lagu. Silakan coba lagi.');
       } finally {
         setIsSearching(false);
       }
-    }, 500);
+    }, 400);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
@@ -275,6 +288,27 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
               }}
               className="w-full bg-elevated border border-subtle focus:border-primary focus:bg-card rounded-2xl px-4 py-3.5 text-sm font-semibold text-primary placeholder:text-secondary/50 focus:outline-none transition"
             />
+
+            {/* Helper Hint / Search Status */}
+            {isSearching && (
+              <div className="mt-1.5 text-[11px] font-bold text-blue flex items-center gap-1.5 px-1">
+                <div className="w-3 h-3 border-2 border-blue border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <span>Mencari video di YouTube...</span>
+              </div>
+            )}
+
+            {searchError && !isSearching && searchQuery.trim().length >= 2 && (
+              <div className="mt-1.5 text-[11px] font-bold text-rose-500 flex items-center gap-1.5 px-1">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{searchError}</span>
+              </div>
+            )}
+
+            {!searchQuery && (
+              <p className="mt-1 text-[11px] text-secondary font-medium px-1">
+                Ketik judul lagu atau nama artis untuk mencari.
+              </p>
+            )}
 
             {/* YouTube Search Autocomplete Results */}
             {showSearchResults && searchResults.length > 0 && (

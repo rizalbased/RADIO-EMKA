@@ -1,4 +1,5 @@
 import { SheetConfig, SongRequest, DbRadioState, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult } from '../types';
+import { decodeHtmlEntities } from '../lib/textUtils';
 import {
   fetchSongRequestsFromDb,
   subscribeToSongRequests,
@@ -361,46 +362,81 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
   if (!query || !query.trim()) return [];
   const cleanQ = query.trim();
 
-  const apiKey = (import.meta as any).env?.VITE_YOUTUBE_API_KEY;
+  console.log(`[YOUTUBE SEARCH] query="${cleanQ}"`);
+
+  const normalizeItem = (item: any): YouTubeSearchResult | null => {
+    if (!item) return null;
+    const rawId = item.videoId || item.id?.videoId || (typeof item.id === 'string' ? item.id : null);
+    const validId = typeof rawId === 'string' && rawId.trim().length === 11 ? rawId.trim() : null;
+    if (!validId) return null;
+
+    const rawTitle = item.title || item.snippet?.title || '';
+    const rawChannel = item.channelTitle || item.artist || item.snippet?.channelTitle || '';
+    const rawThumb =
+      item.thumbnail ||
+      item.snippet?.thumbnails?.high?.url ||
+      item.snippet?.thumbnails?.medium?.url ||
+      item.snippet?.thumbnails?.default?.url ||
+      `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`;
+
+    return {
+      videoId: validId,
+      title: decodeHtmlEntities(rawTitle),
+      channelTitle: decodeHtmlEntities(rawChannel),
+      thumbnail: rawThumb
+    };
+  };
+
+  // 1. Try proxy endpoint /api/youtube/search?q=... (works when Express backend server is running)
+  try {
+    const proxyRes = await fetch(`/api/youtube/search?q=${encodeURIComponent(cleanQ)}`);
+    console.log(`[YOUTUBE SEARCH] proxy status=${proxyRes.status}`);
+
+    if (proxyRes.ok) {
+      const data = await proxyRes.json();
+      const rawItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+      if (rawItems.length > 0) {
+        const results = rawItems.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
+        if (results.length > 0) {
+          console.log(`[YOUTUBE SEARCH] proxy results=${results.length}`);
+          return results;
+        }
+      }
+    }
+  } catch (err: any) {
+    console.log('[YOUTUBE SEARCH] Proxy fetch notice (normal for static deployments):', err?.message || err);
+  }
+
+  // 2. Direct client call to Google YouTube Data API v3 (works on static hosting like GitHub Pages)
+  const apiKey =
+    (import.meta as any).env?.VITE_YOUTUBE_API_KEY ||
+    (import.meta as any).env?.YOUTUBE_API_KEY ||
+    (typeof process !== 'undefined' ? (process.env?.VITE_YOUTUBE_API_KEY || process.env?.YOUTUBE_API_KEY) : '');
+
   if (!apiKey) {
-    console.warn('[YouTube API] VITE_YOUTUBE_API_KEY is not configured');
+    console.warn('[YOUTUBE SEARCH] Neither proxy returned results nor VITE_YOUTUBE_API_KEY is configured.');
     return [];
   }
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      if (res.status === 400) {
-        console.error('[YouTube API Error 400] Bad request or invalid API key.');
-      } else if (res.status === 403) {
-        console.error('[YouTube API Error 403] Quota exceeded or API key restricted/unauthorized.');
-      } else if (res.status === 429) {
-        console.error('[YouTube API Error 429] Rate limit exceeded.');
-      } else {
-        console.error(`[YouTube API Error ${res.status}] Failed to search videos.`);
-      }
+    const directUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
+    const directRes = await fetch(directUrl);
+    console.log(`[YOUTUBE SEARCH] direct status=${directRes.status}`);
+
+    if (!directRes.ok) {
+      const errText = await directRes.text();
+      console.error(`[YOUTUBE SEARCH ERROR] status=${directRes.status} message=${errText}`);
       return [];
     }
 
-    const data = await res.json();
+    const data = await directRes.json();
     if (data.items && Array.isArray(data.items)) {
-      return data.items
-        .map((item: any) => {
-          const rawId = item.id?.videoId;
-          const validId = typeof rawId === 'string' && rawId.trim().length === 11 ? rawId.trim() : null;
-          if (!validId) return null;
-          return {
-            videoId: validId,
-            title: item.snippet?.title || '',
-            channelTitle: item.snippet?.channelTitle || '',
-            thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`
-          };
-        })
-        .filter(Boolean) as YouTubeSearchResult[];
+      const results = data.items.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
+      console.log(`[YOUTUBE SEARCH] direct results=${results.length}`);
+      return results;
     }
-  } catch (err) {
-    console.warn('[YouTube API] Direct client search exception:', err);
+  } catch (err: any) {
+    console.error('[YOUTUBE SEARCH ERROR] Direct search exception:', err?.message || err);
   }
 
   return [];
