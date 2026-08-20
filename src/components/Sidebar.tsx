@@ -154,8 +154,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="flex items-center justify-center space-x-2 pt-1 border-t border-subtle">
               <button
                 onClick={handlePreviousRequest}
-                className="p-1 rounded-lg hover:bg-card text-secondary hover:text-primary transition"
-                title="Lagu Sebelumnya"
+                disabled={userRole !== 'admin'}
+                className={`p-1 rounded-lg transition ${
+                  userRole !== 'admin'
+                    ? 'opacity-40 cursor-not-allowed text-secondary'
+                    : 'hover:bg-card text-secondary hover:text-primary'
+                }`}
+                title={userRole === 'admin' ? "Lagu Sebelumnya" : "Kontrol lagu hanya tersedia untuk penyiar."}
               >
                 <SkipBack className="w-3.5 h-3.5" />
               </button>
@@ -168,8 +173,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               <button
                 onClick={handleNextRequest}
-                className="p-1 rounded-lg hover:bg-card text-secondary hover:text-primary transition"
-                title="Lagu Berikutnya"
+                disabled={userRole !== 'admin'}
+                className={`p-1 rounded-lg transition ${
+                  userRole !== 'admin'
+                    ? 'opacity-40 cursor-not-allowed text-secondary'
+                    : 'hover:bg-card text-secondary hover:text-primary'
+                }`}
+                title={userRole === 'admin' ? "Lagu Berikutnya" : "Kontrol lagu hanya tersedia untuk penyiar."}
               >
                 <SkipForward className="w-3.5 h-3.5" />
               </button>

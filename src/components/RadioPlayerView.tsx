@@ -33,6 +33,7 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
   onLike
 }) => {
   const {
+    userRole,
     ytPlayerState,
     ytVolume,
     ytMuted,
@@ -68,6 +69,7 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
   const queuedRequests = requests.filter((r) => r.status === 'Queued');
   const isPlaying = ytPlayerState === 1;
   const isBuffering = ytPlayerState === 3;
+  const isAdmin = userRole === 'admin';
 
   const [isLiked, setIsLiked] = useState(false);
   const [isYtModalOpen, setIsYtModalOpen] = useState(false);
@@ -100,7 +102,7 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
   };
 
   const handleSaveCustomYt = async () => {
-    if (playingTrack && customYtInput.trim()) {
+    if (isAdmin && playingTrack && customYtInput.trim()) {
       await setCustomVideoIdForTrack(playingTrack.id, customYtInput.trim());
       setIsYtModalOpen(false);
       setCustomYtInput('');
@@ -109,8 +111,8 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
 
   return (
     <div className="bg-card border-2 border-primary rounded-3xl p-5 sm:p-7 shadow-soft space-y-6 transition-colors">
-      {/* Title Header */}
-      <div className="flex items-center justify-between">
+      {/* Title Header & Mode Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center space-x-2.5">
           <span className="flex h-3 w-3 relative">
             <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
@@ -123,21 +125,40 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
           <h2 className="text-xl sm:text-2xl font-black font-display text-primary tracking-wide uppercase">
             RADIO PLAYER
           </h2>
+          {isAdmin ? (
+            <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-300 text-black border border-black/20 shadow-xs">
+              👑 PENYIAR
+            </span>
+          ) : (
+            <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-[#B6FF00] text-black border border-black/20 shadow-xs">
+              🎧 PENDENGAR
+            </span>
+          )}
         </div>
 
         {/* Autoplay Badge / Toggle */}
-        <button
-          onClick={toggleAutoPlay}
-          className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-black transition border ${
-            autoPlay
-              ? 'bg-[#B6FF00] text-[#0B0B0B] border-black/10'
-              : 'bg-elevated text-secondary border-subtle'
-          }`}
-          title="Autoplay memutar lagu berikutnya secara otomatis"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>AUTOPLAY FIFO: {autoPlay ? 'ON' : 'OFF'}</span>
-        </button>
+        {isAdmin ? (
+          <button
+            onClick={toggleAutoPlay}
+            className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-black transition border ${
+              autoPlay
+                ? 'bg-[#B6FF00] text-[#0B0B0B] border-black/10'
+                : 'bg-elevated text-secondary border-subtle'
+            }`}
+            title="Autoplay memutar lagu antrean berikutnya secara otomatis"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>AUTOPLAY FIFO: {autoPlay ? 'ON' : 'OFF'}</span>
+          </button>
+        ) : (
+          <div
+            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-black bg-elevated text-secondary border border-subtle select-none"
+            title="Autoplay dikelola oleh Penyiar"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#B6FF00]" />
+            <span>MENGIKUTI SIARAN PENYIAR</span>
+          </div>
+        )}
       </div>
 
       {/* 16:9 YouTube Player Stage */}
@@ -305,14 +326,14 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
               </button>
             )}
 
-            {playingTrack && (
+            {isAdmin && playingTrack && (
               <button
                 onClick={() => {
                   setCustomYtInput(ytVideoId || playingTrack.youtubeVideoId || '');
                   setIsYtModalOpen(true);
                 }}
                 className="p-2 rounded-xl hover:bg-elevated hover:text-[#B6FF00] transition"
-                title="Ganti / Cek Video ID YouTube"
+                title="Ganti / Cek Video ID YouTube (Penyiar)"
               >
                 <Link className="w-5 h-5" />
               </button>
@@ -356,24 +377,30 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
         <div className="flex items-center space-x-3">
           <button
             onClick={toggleShuffle}
+            disabled={!isAdmin}
             className={`p-2.5 rounded-2xl transition border ${
-              isShuffle
+              !isAdmin
+                ? 'opacity-40 cursor-not-allowed bg-elevated text-secondary border-subtle'
+                : isShuffle
                 ? 'bg-[#B6FF00] text-[#0B0B0B] border-black/10'
                 : 'bg-elevated text-secondary border-subtle hover:text-primary'
             }`}
-            title="Acak Lagu"
+            title={isAdmin ? "Acak Lagu" : "Kontrol antrean hanya tersedia untuk penyiar."}
           >
             <Shuffle className="w-4 h-4" />
           </button>
 
           <button
             onClick={toggleRepeat}
+            disabled={!isAdmin}
             className={`p-2.5 rounded-2xl transition border ${
-              isRepeat
+              !isAdmin
+                ? 'opacity-40 cursor-not-allowed bg-elevated text-secondary border-subtle'
+                : isRepeat
                 ? 'bg-[#B6FF00] text-[#0B0B0B] border-black/10'
                 : 'bg-elevated text-secondary border-subtle hover:text-primary'
             }`}
-            title="Ulangi Lagu"
+            title={isAdmin ? "Ulangi Lagu" : "Kontrol antrean hanya tersedia untuk penyiar."}
           >
             <Repeat className="w-4 h-4" />
           </button>
@@ -383,8 +410,13 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
         <div className="flex items-center space-x-5">
           <button
             onClick={handlePreviousRequest}
-            className="w-11 h-11 rounded-full bg-elevated hover:bg-secondary text-primary flex items-center justify-center border border-subtle transition active:scale-95 shadow-xs"
-            title="Lagu Sebelumnya"
+            disabled={!isAdmin}
+            className={`w-11 h-11 rounded-full flex items-center justify-center border border-subtle transition shadow-xs ${
+              !isAdmin
+                ? 'opacity-40 cursor-not-allowed bg-elevated text-secondary'
+                : 'bg-elevated hover:bg-secondary text-primary active:scale-95'
+            }`}
+            title={isAdmin ? "Lagu Sebelumnya" : "Kontrol lagu hanya tersedia untuk penyiar."}
           >
             <SkipBack className="w-5 h-5" />
           </button>
@@ -404,8 +436,13 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
 
           <button
             onClick={handleNextRequest}
-            className="w-11 h-11 rounded-full bg-elevated hover:bg-secondary text-primary flex items-center justify-center border border-subtle transition active:scale-95 shadow-xs"
-            title="Lagu Berikutnya"
+            disabled={!isAdmin}
+            className={`w-11 h-11 rounded-full flex items-center justify-center border border-subtle transition shadow-xs ${
+              !isAdmin
+                ? 'opacity-40 cursor-not-allowed bg-elevated text-secondary'
+                : 'bg-elevated hover:bg-secondary text-primary active:scale-95'
+            }`}
+            title={isAdmin ? "Lagu Berikutnya" : "Kontrol lagu hanya tersedia untuk penyiar."}
           >
             <SkipForward className="w-5 h-5" />
           </button>

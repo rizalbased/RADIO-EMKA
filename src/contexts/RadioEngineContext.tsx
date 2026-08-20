@@ -183,14 +183,37 @@ export const RadioEngineProvider: React.FC<{
   const [isSearchingYt, setIsSearchingYt] = useState(false);
   const [ytVideoId, setYtVideoId] = useState<string | null>(null);
   const [ytPlayerState, setYtPlayerState] = useState<number>(-1);
-  const [ytVolume, setYtVolume] = useState<number>(85);
-  const [ytMuted, setYtMuted] = useState<boolean>(false);
+
+  // Local user volume & mute state stored in browser memory / localStorage
+  const [ytVolume, setYtVolume] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('fm_local_volume');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) return parsed;
+      }
+    }
+    return 85;
+  });
+  const [ytMuted, setYtMuted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('fm_local_muted') === 'true';
+    }
+    return false;
+  });
+
   const [ytDuration, setYtDuration] = useState<number>(0);
   const [ytCurrentTime, setYtCurrentTime] = useState<number>(0);
   const [activeTrackMetadata, setActiveTrackMetadata] = useState<ActiveTrackMetadata | null>(null);
   const [isAutoplayBlocked, setIsAutoplayBlocked] = useState<boolean>(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
+
+  // Dynamic userRole ref to ensure callbacks always have current role
+  const userRoleRef = useRef<'admin' | 'user'>(userRole);
+  useEffect(() => {
+    userRoleRef.current = userRole;
+  }, [userRole]);
 
   // =========================================================================
   // PLAYER CONTROLLER REF (Delegated to YouTubeRadioPlayer component)
@@ -199,7 +222,7 @@ export const RadioEngineProvider: React.FC<{
 
   const registerPlayerController = useCallback((controller: PlayerController) => {
     playerControllerRef.current = controller;
-    console.log('[PLAYER] CONTROLLER REGISTERED IN ENGINE');
+    console.log('[PLAYER] CONTROLLER REGISTERED IN ENGINE (Role:', userRoleRef.current, ')');
 
     controller.setVolume(ytVolumeRef.current);
     if (ytMutedRef.current) controller.setMuted(true);
@@ -252,71 +275,87 @@ export const RadioEngineProvider: React.FC<{
   useEffect(() => { onUpdateStatusRef.current = onUpdateStatus; }, [onUpdateStatus]);
   useEffect(() => { requestsRef.current = requests; }, [requests]);
 
-  // Sync prop changes for radioState across all devices
-  useEffect(() => {
-    if (radioStateProp !== undefined) {
-      setRadioState(radioStateProp);
-      radioStateRef.current = radioStateProp;
+  // =========================================================================
+  // APPLY REMOTE RADIO STATE (Realtime Listener handler for User & Admin)
+  // Receives changes from Supabase WITHOUT sending any updates back.
+  // =========================================================================
+  const applyRemoteRadioState = useCallback((state: DbRadioState | null) => {
+    setRadioState(state);
+    radioStateRef.current = state;
 
-      const state = radioStateProp;
-      console.log('[REALTIME] PLAYER SYNC - radio_state:', state?.status, state?.current_title);
+    console.log('[REALTIME APPLY] radio_state:', state?.status, state?.current_title);
 
-      if (!state || state.status === 'standby' || !state.current_request_id || !state.current_video_id) {
-        console.log('[REALTIME] PLAYER SYNC - Standby mode: stopping player');
-        if (playerControllerRef.current) {
-          try {
-            playerControllerRef.current.stopVideo();
-          } catch {}
+    if (!state || state.status === 'standby' || !state.current_request_id || !state.current_video_id) {
+      console.log('[REALTIME APPLY] Standby mode: stopping player');
+      if (playerControllerRef.current) {
+        try {
+          playerControllerRef.current.stopVideo();
+        } catch {}
+      }
+      setYtVideoId(null);
+      setActiveTrackMetadata(null);
+      setYtCurrentTime(0);
+      setYtDuration(0);
+      setYtPlayerState(0);
+      currentLoadedIdRef.current = null;
+      ytVideoIdRef.current = null;
+      return;
+    }
+
+    const validId = extractValidYouTubeId(state.current_video_id);
+    if (!validId) return;
+
+    // 1. If new video was selected by Admin, load it
+    if (currentLoadedIdRef.current !== validId) {
+      console.log('[REALTIME APPLY] Loading new video from remote state:', validId);
+      setYtVideoId(validId);
+      ytVideoIdRef.current = validId;
+      currentLoadedIdRef.current = validId;
+      if (playerControllerRef.current) {
+        playerControllerRef.current.loadVideo(validId);
+        if (state.status === 'playing') {
+          playerControllerRef.current.play();
+        } else {
+          playerControllerRef.current.pause();
         }
-        setYtVideoId(null);
-        setActiveTrackMetadata(null);
-        setYtCurrentTime(0);
-        setYtDuration(0);
-        setYtPlayerState(0);
-        currentLoadedIdRef.current = null;
-        ytVideoIdRef.current = null;
-      } else if (state.status === 'playing' && state.current_video_id && state.current_request_id) {
-        const validId = extractValidYouTubeId(state.current_video_id);
-        if (validId) {
-          if (currentLoadedIdRef.current !== validId) {
-            console.log('[REALTIME] PLAYER SYNC - Loading new video:', validId);
-            setYtVideoId(validId);
-            ytVideoIdRef.current = validId;
-            currentLoadedIdRef.current = validId;
-            if (playerControllerRef.current) {
-              playerControllerRef.current.loadVideo(validId);
-              playerControllerRef.current.play();
-            }
-          } else if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
-            playerControllerRef.current.play();
-          }
-
-          // Match with request if available to get student/class info
-          const matchedReq = requestsRef.current.find((r) => r.id === state.current_request_id);
-
-          setActiveTrackMetadata({
-            videoId: validId,
-            title: state.current_title || matchedReq?.songTitle || 'EMKA Radio Track',
-            channelTitle: state.current_channel_title || matchedReq?.artist || 'EMKA FM',
-            thumbnail: state.current_thumbnail_url || matchedReq?.coverUrl || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
-            duration: 0,
-            currentTime: 0,
-            studentName: matchedReq?.studentName,
-            className: matchedReq?.className,
-            targetPerson: matchedReq?.targetPerson,
-            mood: matchedReq?.mood
-          });
+      }
+    } else {
+      // 2. Video is already loaded, synchronize status with Admin
+      if (state.status === 'playing') {
+        if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
+          console.log('[REALTIME APPLY] Admin playing -> Resume local playback');
+          playerControllerRef.current.play();
         }
       } else if (state.status === 'paused') {
-        console.log('[REALTIME] PLAYER SYNC - Pausing player');
-        if (playerControllerRef.current) {
-          try {
-            playerControllerRef.current.pause();
-          } catch {}
+        if (playerControllerRef.current && ytPlayerStateRef.current === 1) {
+          console.log('[REALTIME APPLY] Admin paused -> Pause local playback');
+          playerControllerRef.current.pause();
         }
       }
     }
-  }, [radioStateProp]);
+
+    // Match with request metadata
+    const matchedReq = requestsRef.current.find((r) => r.id === state.current_request_id);
+    setActiveTrackMetadata({
+      videoId: validId,
+      title: state.current_title || matchedReq?.songTitle || 'EMKA Radio Track',
+      channelTitle: state.current_channel_title || matchedReq?.artist || 'EMKA FM',
+      thumbnail: state.current_thumbnail_url || matchedReq?.coverUrl || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
+      duration: 0,
+      currentTime: 0,
+      studentName: matchedReq?.studentName,
+      className: matchedReq?.className,
+      targetPerson: matchedReq?.targetPerson,
+      mood: matchedReq?.mood
+    });
+  }, []);
+
+  // Sync prop changes for radioState across all devices
+  useEffect(() => {
+    if (radioStateProp !== undefined) {
+      applyRemoteRadioState(radioStateProp);
+    }
+  }, [radioStateProp, applyRemoteRadioState]);
 
   // 1. Initial Load of radio_state from Supabase
   useEffect(() => {
@@ -382,8 +421,13 @@ export const RadioEngineProvider: React.FC<{
     }
   }, []);
 
-  // Admin Play: Play track from queue
+  // Admin Play: Play track from queue (Only Admin is authorized to trigger global play)
   const playQueueTrack = useCallback(async (request: SongRequest) => {
+    if (userRoleRef.current !== 'admin') {
+      console.warn('[USER] playQueueTrack called by user. Aborting global mutation.');
+      return;
+    }
+
     console.log(`[ADMIN PLAY] Play: "${request.songTitle}" by ${request.artist}`);
 
     // Resolve or find YouTube Video ID if needed
@@ -424,12 +468,18 @@ export const RadioEngineProvider: React.FC<{
   }, [playTrackVideoId]);
 
   // Autoplay progression when track ends (Triggered on YT.PlayerState.ENDED)
+  // ONLY Admin initiates FIFO queue transitions on Supabase.
   const handleTrackEnded = useCallback(async () => {
+    if (userRoleRef.current !== 'admin') {
+      console.log('[USER LOCAL] Track ended on User player. Awaiting Admin next song via Realtime.');
+      return;
+    }
+
     if (isTransitioningRef.current) return;
     isTransitioningRef.current = true;
 
     try {
-      console.log('[PLAYER] YT.PlayerState.ENDED');
+      console.log('[ADMIN AUTOPLAY FIFO] YT.PlayerState.ENDED');
       const currentReqId = radioStateRef.current?.current_request_id || playingTrackRef.current?.id || null;
 
       // Handle transition in Supabase (marks current as played, picks next pending, updates radio_state)
@@ -437,7 +487,7 @@ export const RadioEngineProvider: React.FC<{
 
       if (transitionResult.nextRequest) {
         const nextReq = transitionResult.nextRequest;
-        console.log(`[QUEUE] Next track: "${nextReq.songTitle}" by ${nextReq.artist}`);
+        console.log(`[ADMIN QUEUE] Next track: "${nextReq.songTitle}" by ${nextReq.artist}`);
         const nextVid = extractValidYouTubeId(nextReq.youtubeVideoId);
         if (nextVid) {
           playTrackVideoId(nextVid);
@@ -454,7 +504,7 @@ export const RadioEngineProvider: React.FC<{
           }
         }
       } else {
-        console.log('[PLAYER] No next request. Entering standby.');
+        console.log('[ADMIN PLAYER] No next request. Entering standby.');
         setYtVideoId(null);
         setActiveTrackMetadata(null);
         setYtCurrentTime(0);
@@ -576,50 +626,80 @@ export const RadioEngineProvider: React.FC<{
     return () => clearInterval(interval);
   }, [ytPlayerState]);
 
-  // Admin Play / Pause toggle with Supabase radio_state synchronization
+  // Play / Pause toggle: Admin updates global radio_state; User only controls local player
   const togglePlayPause = async () => {
     const controller = playerControllerRef.current;
     const isPlaying = ytPlayerStateRef.current === 1 || radioStateRef.current?.status === 'playing';
 
-    console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
-
-    if (isPlaying) {
-      // 1. Update Supabase radio_state -> paused
-      await setAdminPauseRadio();
-      // 2. Pause YouTube Player
-      if (controller) {
-        controller.pause();
+    if (userRoleRef.current === 'admin') {
+      console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
+      if (isPlaying) {
+        // 1. Update Supabase radio_state -> paused
+        await setAdminPauseRadio();
+        // 2. Pause YouTube Player
+        if (controller) {
+          controller.pause();
+        }
+      } else {
+        // 1. Update Supabase radio_state -> playing
+        await setAdminResumeRadio();
+        // 2. Resume YouTube Player
+        if (controller) {
+          controller.play();
+          setIsAutoplayBlocked(false);
+        } else if (radioStateRef.current?.current_video_id) {
+          playTrackVideoId(radioStateRef.current.current_video_id);
+        } else if (queuedRequestsRef.current.length > 0) {
+          await playQueueTrack(queuedRequestsRef.current[0]);
+        }
       }
     } else {
-      // 1. Update Supabase radio_state -> playing
-      await setAdminResumeRadio();
-      // 2. Resume YouTube Player
-      if (controller) {
-        controller.play();
-        setIsAutoplayBlocked(false);
-      } else if (radioStateRef.current?.current_video_id) {
-        playTrackVideoId(radioStateRef.current.current_video_id);
-      } else if (queuedRequestsRef.current.length > 0) {
-        await playQueueTrack(queuedRequestsRef.current[0]);
+      // USER LOCAL ONLY: Does NOT touch Supabase radio_state or database
+      console.log('[USER LOCAL PLAY/PAUSE CLICK] Current local state:', ytPlayerStateRef.current);
+      if (ytPlayerStateRef.current === 1) {
+        if (controller) {
+          controller.pause();
+        }
+        setYtPlayerState(2);
+      } else {
+        if (controller) {
+          controller.play();
+          setIsAutoplayBlocked(false);
+        } else if (radioStateRef.current?.current_video_id) {
+          playTrackVideoId(radioStateRef.current.current_video_id);
+        }
+        setYtPlayerState(1);
       }
     }
   };
 
   const handleStopRadio = async () => {
-    console.log('[ADMIN STOP] Stopping radio playback and entering standby');
-    await setAdminStopRadio();
-    if (playerControllerRef.current) {
-      try {
-        playerControllerRef.current.stopVideo();
-      } catch {}
+    if (userRoleRef.current === 'admin') {
+      console.log('[ADMIN STOP] Stopping radio playback and entering standby in Supabase');
+      await setAdminStopRadio();
+      if (playerControllerRef.current) {
+        try {
+          playerControllerRef.current.stopVideo();
+        } catch {}
+      }
+      setYtVideoId(null);
+      setActiveTrackMetadata(null);
+      setYtCurrentTime(0);
+      setYtDuration(0);
+      setYtPlayerState(0);
+      currentLoadedIdRef.current = null;
+      ytVideoIdRef.current = null;
+    } else {
+      // USER LOCAL ONLY: Only stops local player without modifying Supabase
+      console.log('[USER LOCAL STOP] Stopping local player playback');
+      if (playerControllerRef.current) {
+        try {
+          playerControllerRef.current.stopVideo();
+        } catch {}
+      }
+      setYtCurrentTime(0);
+      setYtPlayerState(0);
     }
-    setYtVideoId(null);
-    setActiveTrackMetadata(null);
-    setYtCurrentTime(0);
-    setYtDuration(0);
-    setYtPlayerState(0);
-    currentLoadedIdRef.current = null;
-    ytVideoIdRef.current = null;
   };
 
   const startRadioPlayback = async () => {
@@ -627,6 +707,7 @@ export const RadioEngineProvider: React.FC<{
   };
 
   const handleSeekChange = (val: number) => {
+    // User or Admin local player seek - NEVER writes to Supabase
     setYtCurrentTime(val);
     if (playerControllerRef.current) {
       playerControllerRef.current.seekTo(val);
@@ -634,17 +715,25 @@ export const RadioEngineProvider: React.FC<{
   };
 
   const setCustomYtVolume = (val: number) => {
+    // User or Admin local volume - NEVER writes to Supabase
     setYtVolume(val);
     ytVolumeRef.current = val;
+    try {
+      localStorage.setItem('fm_local_volume', String(val));
+    } catch {}
     if (playerControllerRef.current) {
       playerControllerRef.current.setVolume(val);
     }
   };
 
   const toggleMute = () => {
+    // User or Admin local mute - NEVER writes to Supabase
     const nextMute = !ytMutedRef.current;
     setYtMuted(nextMute);
     ytMutedRef.current = nextMute;
+    try {
+      localStorage.setItem('fm_local_muted', String(nextMute));
+    } catch {}
     if (playerControllerRef.current) {
       playerControllerRef.current.setMuted(nextMute);
       if (!nextMute) {
@@ -654,6 +743,7 @@ export const RadioEngineProvider: React.FC<{
   };
 
   const toggleAutoPlay = async () => {
+    if (userRoleRef.current !== 'admin') return;
     const next = !autoPlayRef.current;
     setAutoPlay(next);
     autoPlayRef.current = next;
@@ -666,20 +756,36 @@ export const RadioEngineProvider: React.FC<{
   const toggleRepeat = () => setIsRepeat(!isRepeat);
 
   const handleNextRequest = async () => {
+    if (userRoleRef.current !== 'admin') {
+      console.log('[USER] Next track ignored for user mode (Admin-only).');
+      return;
+    }
     if (isTransitioningRef.current) return;
-    console.log('[PLAYER] Next track clicked');
+    console.log('[ADMIN] Next track clicked');
     await handleTrackEndedRef.current();
   };
 
   const handlePreviousRequest = async () => {
+    if (userRoleRef.current !== 'admin') {
+      console.log('[USER] Previous track: resetting local time to 0');
+      if (playerControllerRef.current) {
+        playerControllerRef.current.seekTo(0);
+        setYtCurrentTime(0);
+      }
+      return;
+    }
     if (playerControllerRef.current) {
-      console.log('[PLAYER] Previous: seeking to start');
+      console.log('[ADMIN] Previous: seeking to start');
       playerControllerRef.current.seekTo(0);
       setYtCurrentTime(0);
     }
   };
 
   const setCustomVideoIdForTrack = async (trackId: string, inputId: string) => {
+    if (userRoleRef.current !== 'admin') {
+      console.warn('[USER] setCustomVideoIdForTrack denied for non-admin.');
+      return;
+    }
     const validId = extractValidYouTubeId(inputId);
     if (!validId) {
       console.warn(`[PLAYER] INVALID YOUTUBE VIDEO ID: ${inputId}`);

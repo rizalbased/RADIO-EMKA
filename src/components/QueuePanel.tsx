@@ -30,9 +30,10 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   onClearAllRequests,
   onOpenStoryModal
 }) => {
-  const { ytPlayerState, playQueueTrack, radioState } = useRadioEngine();
+  const { ytPlayerState, playQueueTrack, radioState, userRole } = useRadioEngine();
   const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
-  const adminQueueError = getLastAdminQueueError();
+  const isAdmin = userRole === 'admin';
+  const adminQueueError = isAdmin ? getLastAdminQueueError() : null;
 
   const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
 
@@ -56,6 +57,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
     });
 
   const handlePlayNow = async (req: SongRequest) => {
+    if (!isAdmin) return;
     await playQueueTrack(req);
   };
 
@@ -72,11 +74,11 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
           </span>
         </div>
 
-        {queuedRequests.length > 0 && (
+        {isAdmin && queuedRequests.length > 0 && (
           <button
             onClick={onClearAllRequests}
             className="flex items-center space-x-1.5 px-3 py-1 rounded-xl text-xs font-bold text-[#FF4F91] hover:bg-[#FF4F91]/10 border border-[#FF4F91]/30 transition"
-            title="Hapus semua lagu dalam antrean"
+            title="Hapus semua lagu dalam antrean (Penyiar)"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Bersihkan Antrean</span>
@@ -148,13 +150,15 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                 <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : 'h-2'}`}></span>
                 <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : 'h-1.5'}`}></span>
               </div>
-              <button
-                onClick={() => onDeleteRequest(playingTrack.id)}
-                className="p-1.5 rounded-lg text-secondary hover:text-rose-500 hover:bg-rose-500/10 transition"
-                title="Hapus request ini"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => onDeleteRequest(playingTrack.id)}
+                  className="p-1.5 rounded-lg text-secondary hover:text-rose-500 hover:bg-rose-500/10 transition"
+                  title="Hapus request ini (Penyiar)"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -201,14 +205,16 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                         </div>
                       )}
 
-                      {/* Quick Play overlay button on hover */}
-                      <button
-                        onClick={() => handlePlayNow(track)}
-                        className="absolute inset-0 bg-black/60 text-[#B6FF00] opacity-0 group-hover:opacity-100 flex items-center justify-center transition"
-                        title="Putar Sekarang"
-                      >
-                        <Play className="w-4 h-4 fill-[#B6FF00]" />
-                      </button>
+                      {/* Quick Play overlay button on hover (Admin only) */}
+                      {isAdmin && (
+                        <button
+                          onClick={() => handlePlayNow(track)}
+                          className="absolute inset-0 bg-black/60 text-[#B6FF00] opacity-0 group-hover:opacity-100 flex items-center justify-center transition"
+                          title="Putar Sekarang (Penyiar)"
+                        >
+                          <Play className="w-4 h-4 fill-[#B6FF00]" />
+                        </button>
+                      )}
                     </div>
 
                     {/* Track info */}
@@ -224,16 +230,20 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
 
                   {/* Actions & Handle */}
                   <div className="flex items-center space-x-1 flex-shrink-0">
-                    <button
-                      onClick={() => onDeleteRequest(track.id)}
-                      className="p-1.5 rounded-lg text-secondary hover:text-rose-500 opacity-0 group-hover:opacity-100 transition"
-                      title="Hapus dari antrean"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                    <div className="p-1 text-secondary">
-                      <GripVertical className="w-4 h-4 cursor-grab" />
-                    </div>
+                    {isAdmin && (
+                      <button
+                        onClick={() => onDeleteRequest(track.id)}
+                        className="p-1.5 rounded-lg text-secondary hover:text-rose-500 opacity-0 group-hover:opacity-100 transition"
+                        title="Hapus dari antrean (Penyiar)"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <div className="p-1 text-secondary">
+                        <GripVertical className="w-4 h-4 cursor-grab" />
+                      </div>
+                    )}
                   </div>
                 </div>
               );
