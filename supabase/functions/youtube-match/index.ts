@@ -125,14 +125,25 @@ serve(async (req) => {
     if (!ytRes.ok) {
       const status = ytRes.status;
       const errText = await ytRes.text();
-      console.warn(`[YOUTUBE QUOTA] Status: ${status}`, errText.slice(0, 200));
+      console.warn(`[YOUTUBE MATCH EDGE FUNCTION] YouTube API Error Status: ${status}`, errText.slice(0, 200));
+
+      if (status === 400 || status === 401 || errText.includes('keyInvalid') || errText.includes('API key not valid')) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'YOUTUBE_AUTH_ERROR',
+            message: 'Secret YOUTUBE_API_KEY di Supabase Edge Function tidak valid.'
+          }),
+          { status: 401, headers: corsHeaders }
+        );
+      }
 
       if (status === 403 || status === 429 || errText.includes('quotaExceeded')) {
         return new Response(
           JSON.stringify({
             success: false,
             error: 'YOUTUBE_QUOTA_EXCEEDED',
-            message: 'Kuota YouTube API sedang habis. Silakan coba link YouTube langsung.'
+            message: 'Kuota pencarian YouTube API pada server sedang habis.'
           }),
           { status: 403, headers: corsHeaders }
         );
@@ -150,7 +161,7 @@ serve(async (req) => {
     if (items.length === 0) {
       return new Response(
         JSON.stringify({ success: false, error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Tidak ditemukan video YouTube untuk "${query}".` }),
-        { status: 444, headers: corsHeaders }
+        { status: 200, headers: corsHeaders }
       );
     }
 
@@ -162,10 +173,10 @@ serve(async (req) => {
 
     const best = scored[0];
 
-    if (!best || best.score < 15 || !best.item?.id?.videoId) {
+    if (!best || best.score < 25 || !best.item?.id?.videoId) {
       console.log(`[YOUTUBE MATCH EDGE FUNCTION] Best candidate score too low (${best?.score || 0}) for "${query}"`);
       return new Response(
-        JSON.stringify({ success: false, error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Hasil YouTube tidak relevan untuk "${query}".` }),
+        JSON.stringify({ success: false, error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Video YouTube yang sesuai tidak ditemukan untuk "${query}".` }),
         { status: 200, headers: corsHeaders }
       );
     }

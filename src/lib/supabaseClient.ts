@@ -22,8 +22,8 @@ export function sanitizeSupabaseKey(rawKey: string): string {
 const rawSupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 const rawSupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
-const supabaseUrl = sanitizeSupabaseUrl(rawSupabaseUrl);
-const supabaseAnonKey = sanitizeSupabaseKey(rawSupabaseAnonKey);
+export const supabaseUrl = sanitizeSupabaseUrl(rawSupabaseUrl);
+export const supabaseAnonKey = sanitizeSupabaseKey(rawSupabaseAnonKey);
 
 let clientInstance: SupabaseClient | null = null;
 let anonymousAuthPromise: Promise<string | null> | null = null;
