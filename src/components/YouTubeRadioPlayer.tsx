@@ -108,18 +108,18 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           events: {
             onReady: (event: any) => {
               readyRef.current = true;
-              console.log('[PLAYER] YOUTUBE READY');
+              console.log('[PLAYER READY]');
 
               const pendingId = pendingVideoIdRef.current;
               if (pendingId) {
                 pendingVideoIdRef.current = null;
-                console.log('[PLAYER] LOADING PENDING VIDEO', pendingId);
+                console.log(`[PLAYER LOAD]\nvideoId=${pendingId}`);
                 event.target.loadVideoById({ videoId: pendingId });
               }
 
               if (pendingPlayRef.current) {
                 pendingPlayRef.current = false;
-                console.log('[PLAYER] EXECUTING PENDING PLAY');
+                console.log('[PLAYER PLAY]');
                 event.target.playVideo();
               }
             },
@@ -152,7 +152,7 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
     const controller: PlayerController = {
       loadVideo: (videoId: string) => {
         if (!videoId) return;
-        console.log(`[PLAYER] LOAD REQUEST videoId=${videoId}`);
+        console.log(`[PLAYER LOAD]\nvideoId=${videoId}`);
         pendingVideoIdRef.current = videoId;
 
         if (!playerRef.current || !readyRef.current) {
@@ -160,7 +160,6 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           return;
         }
 
-        console.log(`[PLAYER] LOAD EXECUTED ${videoId}`);
         playerRef.current.loadVideoById({ videoId });
         pendingVideoIdRef.current = null;
       },
@@ -172,13 +171,13 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           return;
         }
         player.playVideo();
-        console.log('[PLAYER] PLAY EXECUTED');
+        console.log('[PLAYER PLAY]');
       },
       pause: () => {
         const player = playerRef.current;
         if (!player || !readyRef.current) return;
         player.pauseVideo();
-        console.log('[PLAYER] PAUSE EXECUTED');
+        console.log('[PLAYER PAUSE]');
       },
       stopVideo: () => {
         const player = playerRef.current;
@@ -188,7 +187,7 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
         } else if (typeof player.pauseVideo === 'function') {
           player.pauseVideo();
         }
-        console.log('[PLAYER] STOP EXECUTED');
+        console.log('[PLAYER STOP]');
       },
       seekTo: (seconds: number) => {
         if (playerRef.current && readyRef.current) {

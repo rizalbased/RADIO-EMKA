@@ -17,7 +17,8 @@ export {
   logoutAdminFromSupabase
 };
 
-let realtimeChannel: any = null;
+let songRequestsChannel: any = null;
+let radioStateChannel: any = null;
 let lastAdminQueueError: { code?: string; message: string } | null = null;
 
 export function getLastAdminQueueError() {
@@ -337,8 +338,8 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
 }
 
 /**
- * Subscribes to Supabase Realtime changes on both public.song_requests and public.radio_state.
- * Strictly single subscription instance with clean teardown.
+ * Subscribes to Supabase Realtime changes on public.song_requests and public.radio_state.
+ * Uses dedicated channels for each table with proper lifecycle management.
  */
 export function subscribeToSongRequests(callbacks: {
   onInsert?: (newReq: SongRequest) => void;
@@ -352,18 +353,25 @@ export function subscribeToSongRequests(callbacks: {
     return () => {};
   }
 
-  // Remove existing channel if already active to prevent duplicates
-  if (realtimeChannel) {
+  // Remove existing channels if already active to prevent duplicate listeners
+  if (songRequestsChannel) {
     try {
-      client.removeChannel(realtimeChannel);
+      client.removeChannel(songRequestsChannel);
     } catch {}
-    realtimeChannel = null;
+    songRequestsChannel = null;
+  }
+  if (radioStateChannel) {
+    try {
+      client.removeChannel(radioStateChannel);
+    } catch {}
+    radioStateChannel = null;
   }
 
-  console.log('[EMKA REALTIME] Subscribing to emka-radio-realtime channel...');
+  console.log('[REALTIME] Subscribing to song-requests-realtime and radio-state-realtime...');
 
-  const channel = client
-    .channel('emka-radio-realtime')
+  // 1. Channel for song_requests
+  songRequestsChannel = client
+    .channel('song-requests-realtime')
     .on(
       'postgres_changes',
       {
@@ -381,8 +389,8 @@ export function subscribeToSongRequests(callbacks: {
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
         } else if (payload.eventType === 'DELETE') {
-          const deletedId = payload.old?.id;
-          console.log('[REALTIME] SONG REQUEST DELETE', payload.old);
+          const deletedId = (payload.old as any)?.id;
+          console.log(`[REQUEST REALTIME DELETE]\nrequestId=${deletedId}`);
           if (deletedId) {
             callbacks.onDelete?.(deletedId);
           }
@@ -391,13 +399,28 @@ export function subscribeToSongRequests(callbacks: {
         // Always sync queue directly with Supabase to ensure absolute consistency
         try {
           const { requests } = await fetchSongRequestsFromDb();
-          console.log('[REALTIME] QUEUE SYNC', requests?.length);
+          console.log('[REALTIME] QUEUE SYNC count =', requests?.length);
           callbacks.onSyncAll?.(requests);
         } catch (e) {
           console.error('[REALTIME] Error refreshing queue after event:', e);
         }
       }
     )
+    .subscribe((status, err) => {
+      console.log('[REALTIME SONG REQUESTS STATUS]', status);
+      if (status === 'SUBSCRIBED') {
+        fetchSongRequestsFromDb().then(({ requests }) => {
+          callbacks.onSyncAll?.(requests);
+        });
+      }
+      if (err) {
+        console.error('[REALTIME SONG REQUESTS ERROR]', err);
+      }
+    });
+
+  // 2. Channel for radio_state
+  radioStateChannel = client
+    .channel('radio-state-realtime')
     .on(
       'postgres_changes',
       {
@@ -406,43 +429,42 @@ export function subscribeToSongRequests(callbacks: {
         table: 'radio_state'
       },
       (payload) => {
-        console.log('[REALTIME] RADIO STATE UPDATE', payload);
+        console.log('[RADIO STATE REALTIME]\n', payload.new);
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
-          console.log('[RADIO STATE]', rawNew.status);
-          console.log('[REALTIME RADIO STATE]', rawNew.current_request_id);
+          console.log('[RADIO STATE STATUS]', rawNew.status);
+          console.log('[RADIO STATE CURRENT]', rawNew.current_request_id, rawNew.current_title);
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
     )
     .subscribe((status, err) => {
-      console.log('[EMKA REALTIME STATUS]', status);
+      console.log('[REALTIME RADIO STATE STATUS]', status);
       if (status === 'SUBSCRIBED') {
-        fetchSongRequestsFromDb().then(({ requests }) => {
-          console.log('[REALTIME] QUEUE SYNC', requests?.length);
-          callbacks.onSyncAll?.(requests);
-        });
         fetchRadioStateFromDb().then(({ state }) => {
           if (state) {
-            console.log('[CURRENT REQUEST]', state.current_request_id);
-            console.log('[RADIO STATE]', state.status);
+            console.log('[RADIO STATE INITIAL]', state.status, state.current_title);
             callbacks.onRadioStateChange?.(state);
           }
         });
       }
       if (err) {
-        console.error('[EMKA REALTIME ERROR]', err);
+        console.error('[REALTIME RADIO STATE ERROR]', err);
       }
     });
 
-  realtimeChannel = channel;
-
   return () => {
-    if (realtimeChannel) {
+    if (songRequestsChannel) {
       try {
-        client.removeChannel(realtimeChannel);
+        client.removeChannel(songRequestsChannel);
       } catch {}
-      realtimeChannel = null;
+      songRequestsChannel = null;
+    }
+    if (radioStateChannel) {
+      try {
+        client.removeChannel(radioStateChannel);
+      } catch {}
+      radioStateChannel = null;
     }
   };
 }
@@ -714,56 +736,69 @@ export async function likeDbSongRequest(requestId: string): Promise<{ success: b
 
 export async function deleteDbSongRequest(requestId: string): Promise<{ success: boolean; was_playing?: boolean }> {
   if (!requestId) {
-    console.error('[DELETE REQUEST] Missing request ID');
+    console.error('[REQUEST DELETE] Missing request ID');
     return { success: false };
   }
 
-  console.log('[DELETE REQUEST]', requestId);
+  console.log(`[REQUEST DELETE]\nrequestId=${requestId}`);
 
   const client = getSupabaseClient();
   if (!client) {
-    console.error('[DELETE REQUEST] Supabase client not available');
+    console.error('[REQUEST DELETE] Supabase client not available');
     return { success: false };
   }
 
   try {
-    const { data, error } = await client.rpc('delete_song_request', {
-      p_request_id: requestId
-    });
+    // 1. Check if the deleted song is the current track in radio_state
+    const { state } = await fetchRadioStateFromDb();
+    const wasPlaying = Boolean(state && state.current_request_id === requestId);
 
-    if (error) {
-      console.error('[DELETE REQUEST] RPC ERROR:', error);
-      return { success: false };
+    if (wasPlaying) {
+      console.log(`[RADIO STATE] Clearing current song because active request is being deleted: ${requestId}`);
+      await updateRadioStateInDb({
+        status: 'paused',
+        current_request_id: null,
+        current_video_id: null,
+        current_title: null,
+        current_channel_title: null,
+        current_thumbnail_url: null,
+        started_at: null
+      });
     }
 
-    console.log('[DELETE REQUEST] RPC RESULT:', data);
+    // 2. Perform direct delete using primary key ID
+    const { error: directErr } = await client
+      .from('song_requests')
+      .delete()
+      .eq('id', requestId);
 
-    const isSuccess =
-      data === true ||
-      data?.success === true ||
-      (typeof data === 'object' && data !== null && !('error' in data) && data?.success !== false);
-    const wasPlaying = Boolean(data?.was_playing ?? data?.wasPlaying);
-
-    if (!isSuccess) {
-      console.error('[DELETE REQUEST] RPC returned unsuccessful result:', data);
-      return { success: false, was_playing: wasPlaying };
+    if (directErr) {
+      console.warn('[REQUEST DELETE] Direct delete error, trying RPC fallback:', directErr.message);
+      // RPC fallback if RLS or triggers require RPC
+      const { data: rpcData, error: rpcErr } = await client.rpc('delete_song_request', {
+        p_request_id: requestId
+      });
+      if (rpcErr && directErr) {
+        console.error('[REQUEST DELETE] Delete failed:', directErr.message || rpcErr.message);
+        return { success: false, was_playing: wasPlaying };
+      }
     }
 
-    // Database verification: Pastikan row benar-benar hilang dari database
+    // 3. Database verification: Pastikan row benar-benar hilang dari database
     const { data: verifyData } = await client
       .from('song_requests')
       .select('id')
       .eq('id', requestId);
 
     if (verifyData && verifyData.length > 0) {
-      console.error('[DELETE REQUEST] DATABASE ROW STILL EXISTS:', requestId);
+      console.error('[REQUEST DELETE] Database row still exists after delete:', requestId);
       return { success: false, was_playing: wasPlaying };
     }
 
-    console.log('[DELETE SUCCESS]', requestId);
+    console.log(`[REQUEST DELETE SUCCESS]\nrequestId=${requestId}`);
     return { success: true, was_playing: wasPlaying };
-  } catch (err) {
-    console.error('[DELETE REQUEST] Exception during RPC delete:', err);
+  } catch (err: any) {
+    console.error('[REQUEST DELETE] Exception during delete:', err);
     return { success: false };
   }
 }
