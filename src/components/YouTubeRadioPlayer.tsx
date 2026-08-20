@@ -160,8 +160,14 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           return;
         }
 
-        playerRef.current.loadVideoById({ videoId });
-        pendingVideoIdRef.current = null;
+        try {
+          if (typeof playerRef.current.loadVideoById === 'function') {
+            playerRef.current.loadVideoById({ videoId });
+            pendingVideoIdRef.current = null;
+          }
+        } catch (e) {
+          console.warn('[PLAYER] loadVideo error:', e);
+        }
       },
       play: () => {
         const player = playerRef.current;
@@ -170,56 +176,99 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           console.log('[PLAYER] PLAY QUEUED — PLAYER NOT READY');
           return;
         }
-        player.playVideo();
-        console.log('[PLAYER PLAY]');
+        try {
+          if (typeof player.playVideo === 'function') {
+            player.playVideo();
+            console.log('[PLAYER PLAY]');
+          }
+        } catch (e) {
+          console.warn('[PLAYER] playVideo error:', e);
+        }
       },
       pause: () => {
         const player = playerRef.current;
         if (!player || !readyRef.current) return;
-        player.pauseVideo();
-        console.log('[PLAYER PAUSE]');
+        try {
+          if (typeof player.pauseVideo === 'function') {
+            player.pauseVideo();
+            console.log('[PLAYER PAUSE]');
+          }
+        } catch (e) {
+          console.warn('[PLAYER] pauseVideo error:', e);
+        }
       },
       stopVideo: () => {
         const player = playerRef.current;
         if (!player || !readyRef.current) return;
-        if (typeof player.stopVideo === 'function') {
-          player.stopVideo();
-        } else if (typeof player.pauseVideo === 'function') {
-          player.pauseVideo();
+        try {
+          if (typeof player.stopVideo === 'function') {
+            player.stopVideo();
+          } else if (typeof player.pauseVideo === 'function') {
+            player.pauseVideo();
+          }
+          console.log('[PLAYER STOP]');
+        } catch (e) {
+          console.warn('[PLAYER] stopVideo error:', e);
         }
-        console.log('[PLAYER STOP]');
       },
       seekTo: (seconds: number) => {
-        if (playerRef.current && readyRef.current) {
-          playerRef.current.seekTo(seconds, true);
+        if (playerRef.current && readyRef.current && typeof playerRef.current.seekTo === 'function') {
+          try {
+            playerRef.current.seekTo(seconds, true);
+          } catch (e) {
+            console.warn('[PLAYER] seekTo error:', e);
+          }
         }
       },
       setVolume: (volume: number) => {
-        if (playerRef.current && readyRef.current) {
-          playerRef.current.setVolume(volume);
+        if (playerRef.current && readyRef.current && typeof playerRef.current.setVolume === 'function') {
+          try {
+            playerRef.current.setVolume(volume);
+          } catch (e) {
+            console.warn('[PLAYER] setVolume error:', e);
+          }
         }
       },
       setMuted: (muted: boolean) => {
         if (playerRef.current && readyRef.current) {
-          if (muted) playerRef.current.mute();
-          else playerRef.current.unMute();
+          try {
+            if (muted && typeof playerRef.current.mute === 'function') {
+              playerRef.current.mute();
+            } else if (!muted && typeof playerRef.current.unMute === 'function') {
+              playerRef.current.unMute();
+            }
+          } catch (e) {
+            console.warn('[PLAYER] setMuted error:', e);
+          }
         }
       },
       getCurrentTime: () => {
         if (playerRef.current && readyRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-          return playerRef.current.getCurrentTime();
+          try {
+            return playerRef.current.getCurrentTime() || 0;
+          } catch (e) {
+            return 0;
+          }
         }
         return 0;
       },
       getDuration: () => {
         if (playerRef.current && readyRef.current && typeof playerRef.current.getDuration === 'function') {
-          return playerRef.current.getDuration();
+          try {
+            return playerRef.current.getDuration() || 0;
+          } catch (e) {
+            return 0;
+          }
         }
         return 0;
       },
       getVideoData: () => {
         if (playerRef.current && readyRef.current && typeof playerRef.current.getVideoData === 'function') {
-          return playerRef.current.getVideoData();
+          try {
+            return playerRef.current.getVideoData();
+          } catch (e) {
+            return null;
+          }
         }
         return null;
       }

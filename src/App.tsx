@@ -101,32 +101,69 @@ export default function App() {
 
       const params = new URLSearchParams(window.location.search);
       const urlMode = params.get('mode') || params.get('role');
+      const urlTab = params.get('tab');
+      const pathname = window.location.pathname.toLowerCase();
       const isChosen = localStorage.getItem('fm_access_chosen') === 'true';
       const savedRole = localStorage.getItem('fm_user_role') as 'user' | 'admin' | null;
+      const isAdminLocalAuth = localStorage.getItem('fm_admin_authenticated') === 'true';
+
+      // Check URL path or param for tab navigation
+      let targetTab: MainTabType | null = null;
+      if (urlTab) {
+        targetTab = urlTab as MainTabType;
+      } else if (pathname.includes('request')) {
+        targetTab = 'request';
+      } else if (pathname.includes('live') || pathname.includes('feed')) {
+        targetTab = 'feed';
+      } else if (pathname.includes('preview')) {
+        targetTab = 'preview';
+      } else if (pathname.includes('antrian') || pathname.includes('queue')) {
+        targetTab = 'queue';
+      } else if (pathname.includes('radio-player') || pathname.includes('player')) {
+        targetTab = 'player';
+      } else if (pathname.includes('dj') || pathname.includes('setting')) {
+        targetTab = 'dj';
+      }
+
+      // Check if this is an explicit Admin route
+      const isAdminExplicit = urlMode === 'admin' || pathname.startsWith('/admin');
 
       // Verify Supabase Auth Session
       const adminStatus = await getAdminSessionStatus();
+      const isActuallyAdmin = adminStatus.isAdmin || isAdminLocalAuth;
 
-      if (urlMode === 'admin' || (isChosen && savedRole === 'admin')) {
-        if (adminStatus.isAdmin) {
+      if (isAdminExplicit) {
+        if (isActuallyAdmin) {
           setUserRole('admin');
-          setActiveTab('player');
+          setActiveTab(targetTab || 'player');
           setIsAccessChosen(true);
+          localStorage.setItem('fm_access_chosen', 'true');
+          localStorage.setItem('fm_user_role', 'admin');
+          localStorage.setItem('fm_admin_authenticated', 'true');
         } else {
-          // If admin requested but not authenticated with admin role, show PIN modal or landing
+          // If admin requested but not authenticated, open PIN modal
           setIsAccessChosen(false);
           setIsAdminPinModalOpen(true);
         }
-      } else if (urlMode === 'user' || urlMode === 'student' || (isChosen && savedRole === 'user')) {
+      } else if (savedRole === 'admin' && isActuallyAdmin && isChosen) {
+        // Preserved Admin Session on refresh
+        setUserRole('admin');
+        setActiveTab(targetTab || 'player');
+        setIsAccessChosen(true);
+        setIsAdminPinModalOpen(false);
+      } else if (urlMode === 'user' || urlMode === 'student' || savedRole === 'user' || isChosen) {
+        // Preserved User Session on refresh -> NEVER ask for PIN!
         setUserRole('user');
-        setActiveTab('feed');
+        setActiveTab(targetTab || 'feed');
         setIsAccessChosen(true);
         localStorage.setItem('fm_access_chosen', 'true');
         localStorage.setItem('fm_user_role', 'user');
+        setIsAdminPinModalOpen(false);
         ensureAnonymousSession().catch(() => {});
       } else {
-        // First time opening: Show welcome access selection screen
+        // Default landing screen allows choosing Siswa or Admin
         setIsAccessChosen(false);
+        setIsAdminPinModalOpen(false);
         ensureAnonymousSession().catch(() => {});
       }
     }

@@ -305,32 +305,43 @@ export const RadioEngineProvider: React.FC<{
     const validId = extractValidYouTubeId(state.current_video_id);
     if (!validId) return;
 
+    const isUser = userRoleRef.current === 'user';
+
     // 1. If new video was selected by Admin, load it
     if (currentLoadedIdRef.current !== validId) {
-      console.log('[REALTIME APPLY] Loading new video from remote state:', validId);
+      console.log('[REALTIME APPLY] Loading new video from remote state:', validId, 'isUser:', isUser);
       setYtVideoId(validId);
       ytVideoIdRef.current = validId;
       currentLoadedIdRef.current = validId;
       if (playerControllerRef.current) {
         playerControllerRef.current.loadVideo(validId);
         if (state.status === 'playing') {
-          playerControllerRef.current.play();
+          // If admin, or if user is currently playing, start playing new song
+          if (!isUser || ytPlayerStateRef.current === 1) {
+            playerControllerRef.current.play();
+          }
         } else {
           playerControllerRef.current.pause();
         }
       }
     } else {
-      // 2. Video is already loaded, synchronize status with Admin
-      if (state.status === 'playing') {
-        if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
-          console.log('[REALTIME APPLY] Admin playing -> Resume local playback');
-          playerControllerRef.current.play();
+      // 2. Video is already loaded.
+      // Admin syncs play/pause from master state.
+      // USER LOCAL PLAYER is NOT overwritten by remote pause/play events.
+      if (!isUser) {
+        if (state.status === 'playing') {
+          if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
+            console.log('[REALTIME APPLY] Admin playing -> Resume playback');
+            playerControllerRef.current.play();
+          }
+        } else if (state.status === 'paused') {
+          if (playerControllerRef.current && ytPlayerStateRef.current === 1) {
+            console.log('[REALTIME APPLY] Admin paused -> Pause playback');
+            playerControllerRef.current.pause();
+          }
         }
-      } else if (state.status === 'paused') {
-        if (playerControllerRef.current && ytPlayerStateRef.current === 1) {
-          console.log('[REALTIME APPLY] Admin paused -> Pause local playback');
-          playerControllerRef.current.pause();
-        }
+      } else {
+        console.log('[REALTIME APPLY] User mode: Realtime radio info updated, local player state retained (localState:', ytPlayerStateRef.current, ')');
       }
     }
 
