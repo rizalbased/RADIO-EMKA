@@ -41,6 +41,7 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
   const mountedRef = useRef<boolean>(false);
   const pendingVideoIdRef = useRef<string | null>(null);
   const pendingPlayRef = useRef<boolean>(false);
+  const pendingSeekRef = useRef<number | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -111,16 +112,33 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
               console.log('[PLAYER READY]');
 
               const pendingId = pendingVideoIdRef.current;
-              if (pendingId) {
-                pendingVideoIdRef.current = null;
-                console.log(`[PLAYER LOAD]\nvideoId=${pendingId}`);
-                event.target.loadVideoById({ videoId: pendingId });
-              }
+              const pendingSeek = pendingSeekRef.current;
+              const shouldPlay = pendingPlayRef.current;
 
-              if (pendingPlayRef.current) {
-                pendingPlayRef.current = false;
-                console.log('[PLAYER PLAY]');
-                event.target.playVideo();
+              pendingVideoIdRef.current = null;
+              pendingSeekRef.current = null;
+              pendingPlayRef.current = false;
+
+              if (pendingId) {
+                console.log(`[PLAYER ONREADY QUEUE PROCESS]\nvideoId=${pendingId}, seek=${pendingSeek}, play=${shouldPlay}`);
+                if (shouldPlay) {
+                  event.target.loadVideoById({
+                    videoId: pendingId,
+                    startSeconds: pendingSeek || 0
+                  });
+                } else {
+                  event.target.cueVideoById({
+                    videoId: pendingId,
+                    startSeconds: pendingSeek || 0
+                  });
+                }
+              } else {
+                if (pendingSeek !== null && typeof event.target.seekTo === 'function') {
+                  event.target.seekTo(pendingSeek, true);
+                }
+                if (shouldPlay && typeof event.target.playVideo === 'function') {
+                  event.target.playVideo();
+                }
               }
             },
             onStateChange: (event: any) => {
@@ -218,6 +236,8 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
           } catch (e) {
             console.warn('[PLAYER] seekTo error:', e);
           }
+        } else {
+          pendingSeekRef.current = seconds;
         }
       },
       setVolume: (volume: number) => {

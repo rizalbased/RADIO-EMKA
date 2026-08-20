@@ -377,7 +377,6 @@ const itunesMemoryCache = new Map<string, ItunesCacheItem>();
 export async function searchItunesSongs(query: string): Promise<ItunesSearchResult[]> {
   if (!query || !query.trim()) return [];
   const rawQ = query.trim();
-  console.log('[ITUNES SEARCH] Term:', rawQ);
   const normKey = rawQ.toLowerCase();
   const now = Date.now();
 
@@ -387,7 +386,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
     if (memCached.errorMessage) {
       throw new Error(memCached.errorMessage);
     }
-    console.log('[ITUNES RESULT] Returning memory cache count:', memCached.items.length);
+    console.log('[ITUNES SEARCH] query:', rawQ, 'results:', memCached.items.length, '(cached)');
     return memCached.items;
   }
 
@@ -401,7 +400,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
           throw new Error(parsed.errorMessage);
         }
         itunesMemoryCache.set(normKey, parsed);
-        console.log('[ITUNES RESULT] Returning localStorage cache count:', parsed.items.length);
+        console.log('[ITUNES SEARCH] query:', rawQ, 'results:', parsed.items.length, '(ls_cached)');
         return parsed.items;
       }
     }
@@ -426,15 +425,15 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
     };
   };
 
-  // 1. Direct fetch to iTunes Search API
+  // 1. Direct fetch to iTunes Search API (media=music, entity=song, limit=20)
   try {
-    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(rawQ)}&entity=song&limit=10`;
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(rawQ)}&media=music&entity=song&limit=20`;
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data.results && Array.isArray(data.results)) {
         const results = data.results.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
-        console.log('[ITUNES RESULT] Direct fetch count:', results.length);
+        console.log('[ITUNES SEARCH] query:', rawQ, 'results:', results.length);
         if (results.length > 0) {
           const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
           itunesMemoryCache.set(normKey, cacheEntry);
@@ -454,7 +453,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
     console.warn('[ITUNES SEARCH] Direct fetch notice:', err?.message || err);
   }
 
-  // 2. Fallback to Express backend proxy or Supabase Edge function
+  // 2. Fallback to Express backend proxy
   try {
     const proxyRes = await fetch(`/api/itunes/search?term=${encodeURIComponent(rawQ)}`);
     if (proxyRes.ok) {
@@ -462,7 +461,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
       const rawResults = proxyData.results || proxyData.items || [];
       if (Array.isArray(rawResults) && rawResults.length > 0) {
         const results = rawResults.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
-        console.log('[ITUNES SEARCH] Proxy fetch count:', results.length);
+        console.log('[ITUNES SEARCH] Proxy query:', rawQ, 'results:', results.length);
         if (results.length > 0) {
           const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
           itunesMemoryCache.set(normKey, cacheEntry);
@@ -475,7 +474,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
     console.warn('[ITUNES SEARCH] Proxy fetch notice:', proxyErr);
   }
 
-  const errorMsg = 'Pencarian lagu sedang mengalami gangguan.';
+  const errorMsg = 'Pencarian lagu sedang mengalami gangguan. Silakan coba lagi.';
   throw new Error(errorMsg);
 }
 
@@ -498,19 +497,19 @@ export function normalizeSongQuery(title: string, artist: string): { cleanTitle:
 }
 
 /**
- * Searches YouTube for a matching video based on song title and artist.
+ * Searches YouTube for a matching video based on iTunes song title and artist.
  * Returns a valid 11-character YouTube videoId.
  */
 export async function findYouTubeMatch(title: string, artist: string): Promise<string> {
   const { cleanTitle, cleanArtist, searchQuery } = normalizeSongQuery(title, artist);
 
-  console.log(`[YOUTUBE MATCH] Finding YouTube video for: "${searchQuery}"`);
+  console.log(`[YOUTUBE MATCH] Finding YouTube video for query: "${searchQuery}"`);
 
   if (!searchQuery) {
     throw new Error('Judul dan artis lagu harus diisi.');
   }
 
-  // 1. Try Supabase Edge Function / Node endpoint /functions/v1/youtube-match first
+  // Try backend matching endpoint /functions/v1/youtube-match or /api/youtube/search
   try {
     const edgeRes = await fetch('/functions/v1/youtube-match', {
       method: 'POST',
@@ -522,43 +521,25 @@ export async function findYouTubeMatch(title: string, artist: string): Promise<s
       const edgeData = await edgeRes.json();
       if (edgeData.success && edgeData.videoId && typeof edgeData.videoId === 'string' && edgeData.videoId.trim().length === 11) {
         const vid = edgeData.videoId.trim();
-        console.log(`[YOUTUBE MATCH] Success via Edge Function! Found videoId: ${vid} for "${searchQuery}"`);
+        console.log(`[YOUTUBE MATCH] query: "${searchQuery}", videoId: ${vid}, matchedTitle: "${cleanTitle}", matchedArtist: "${cleanArtist}"`);
         return vid;
       } else if (edgeData.error === 'YOUTUBE_QUOTA_EXCEEDED') {
-        console.warn(`[YOUTUBE QUOTA] Quota exceeded on server for "${searchQuery}"`);
-        throw new Error(edgeData.message || 'Kuota YouTube API sedang habis. Silakan tempelkan link YouTube langsung.');
+        console.warn(`[YOUTUBE MATCH] Quota exceeded on server for "${searchQuery}"`);
+        throw new Error(edgeData.message || 'Video YouTube belum dapat dicocokkan saat ini. Silakan coba lagi nanti.');
       } else if (edgeData.error === 'YOUTUBE_MATCH_NOT_FOUND') {
-        console.warn(`[YOUTUBE MATCH] Not found via Edge Function for "${searchQuery}"`);
-        throw new Error(`Gagal menemukan video YouTube yang cocok untuk "${cleanTitle} - ${cleanArtist}". Silakan coba lagu lain atau tempelkan link YouTube.`);
+        console.warn(`[YOUTUBE MATCH] Video YouTube yang sesuai tidak ditemukan untuk "${searchQuery}"`);
+        throw new Error(edgeData.message || 'Video YouTube yang sesuai tidak ditemukan.');
       }
     }
   } catch (err: any) {
-    if (err?.message && (err.message.includes('Kuota') || err.message.includes('Gagal menemukan'))) {
+    if (err?.message && (err.message.includes('belum dapat dicocokkan') || err.message.includes('tidak ditemukan'))) {
       throw err;
     }
-    console.log('[YOUTUBE MATCH] Edge Function notice:', err?.message || err);
+    console.log('[YOUTUBE MATCH] Backend notice:', err?.message || err);
   }
 
-  // 2. Fallback to searchYouTubeVideos
-  try {
-    const results = await searchYouTubeVideos(searchQuery);
-    if (results && results.length > 0) {
-      const validMatch = results.find(r => typeof r.videoId === 'string' && r.videoId.trim().length === 11);
-      if (validMatch && validMatch.videoId) {
-        const matchedId = validMatch.videoId.trim();
-        console.log(`[YOUTUBE MATCH] Success via Fallback! Found videoId: ${matchedId} for "${searchQuery}"`);
-        return matchedId;
-      }
-    }
-  } catch (err: any) {
-    console.warn(`[YOUTUBE MATCH] Search fallback failed for "${searchQuery}":`, err?.message || err);
-    if (err?.message && err.message.includes('Kuota')) {
-      throw err;
-    }
-  }
-
-  console.error(`[YOUTUBE MATCH] Failed to find YouTube videoId for: "${searchQuery}"`);
-  throw new Error(`Gagal menemukan video YouTube yang cocok untuk "${cleanTitle} - ${cleanArtist}". Silakan coba lagu lain atau tempelkan link YouTube.`);
+  console.error(`[YOUTUBE MATCH] Failed to match YouTube videoId for: "${searchQuery}"`);
+  throw new Error('Video YouTube yang sesuai tidak ditemukan.');
 }
 
 // Search cache store (In-memory + localStorage backup)

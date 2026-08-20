@@ -36,21 +36,26 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   const isAdmin = userRole === 'admin';
   const adminQueueError = isAdmin ? getLastAdminQueueError() : null;
 
-  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
+  const activePlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused'))
+    ? radioState.current_request_id
+    : (requests.find((r) => r.status === 'Playing' || r.status === 'playing')?.id || null);
 
-  const playingTrack = currentPlayingId
-    ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
-        id: currentPlayingId,
+  const playingTrack = activePlayingId
+    ? requests.find((r) => r.id === activePlayingId) || (radioState?.current_title ? {
+        id: activePlayingId,
         songTitle: radioState.current_title,
-        artist: radioState.current_channel_title || '',
+        artist: radioState.current_channel_title || 'EMKA FM',
         coverUrl: radioState.current_thumbnail_url || undefined,
-        status: 'Playing'
+        youtubeVideoId: radioState.current_video_id || undefined,
+        status: radioState?.status === 'paused' ? 'Paused' : 'Playing'
       } as SongRequest : undefined)
-    : undefined;
+    : requests.find((r) => r.status === 'Playing' || r.status === 'playing');
+
+  const playingId = playingTrack?.id || activePlayingId;
 
   // Strict FIFO: sort queued requests by oldest timestamp first (excluding currently playing track)
   const queuedRequests = requests
-    .filter((r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId)
+    .filter((r) => (r.status === 'Queued' || r.status === 'queued' || r.status === 'pending' || r.status === 'Pending') && r.id !== playingId)
     .sort((a, b) => {
       const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;

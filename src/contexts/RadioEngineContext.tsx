@@ -11,7 +11,7 @@ import {
   setRadioStandbyInDb,
   handleSongEndedTransition,
   updateRequestYoutubeVideoId,
-  searchYouTubeVideos
+  findYouTubeMatch
 } from '../services/api';
 
 // Declare standard YouTube IFrame API window type
@@ -211,6 +211,8 @@ export const RadioEngineProvider: React.FC<{
 
   // Dynamic userRole ref to ensure callbacks always have current role
   const userRoleRef = useRef<'admin' | 'user'>(userRole);
+  const localStateVersionRef = useRef<number>(0);
+
   useEffect(() => {
     userRoleRef.current = userRole;
   }, [userRole]);
@@ -288,6 +290,14 @@ export const RadioEngineProvider: React.FC<{
   // Receives changes from Supabase WITHOUT sending any updates back.
   // =========================================================================
   const applyRemoteRadioState = useCallback((state: DbRadioState | null) => {
+    if (state && state.state_version) {
+      if (localStateVersionRef.current > 0 && state.state_version < localStateVersionRef.current) {
+        console.log('[REALTIME APPLY] Ignoring stale remote state version:', state.state_version, 'local:', localStateVersionRef.current);
+        return;
+      }
+      localStateVersionRef.current = state.state_version;
+    }
+
     setRadioState(state);
     radioStateRef.current = state;
 
@@ -460,19 +470,19 @@ export const RadioEngineProvider: React.FC<{
 
     if (!validId) {
       setIsSearchingYt(true);
-      const searchQuery = `${request.songTitle} ${request.artist} official audio`;
-      const results = await searchYouTubeVideos(searchQuery);
-      if (results && results.length > 0) {
-        validId = extractValidYouTubeId(results[0].videoId);
-        resolvedTitle = results[0].title;
-        resolvedArtist = results[0].channelTitle;
-        resolvedThumb = results[0].thumbnail;
+      try {
+        const matchedVid = await findYouTubeMatch(request.songTitle, request.artist);
+        validId = extractValidYouTubeId(matchedVid);
         if (validId) {
           await updateRequestYoutubeVideoId(request.id, validId);
         }
+      } catch (matchErr: any) {
+        console.warn(`[ADMIN PLAY] YouTube matching notice for "${request.songTitle}":`, matchErr?.message || matchErr);
       }
       setIsSearchingYt(false);
     }
+
+    console.log(`[TRANSITION] from: ${radioStateRef.current?.current_request_id || 'none'} to: ${request.id}`);
 
     // 1. Update Supabase song_requests & radio_state
     await setAdminPlaySong({
@@ -509,21 +519,22 @@ export const RadioEngineProvider: React.FC<{
 
       if (transitionResult.nextRequest) {
         const nextReq = transitionResult.nextRequest;
+        console.log(`[TRANSITION] from: ${currentReqId || 'none'} to: ${nextReq.id}`);
         console.log(`[ADMIN QUEUE] Next track: "${nextReq.songTitle}" by ${nextReq.artist}`);
-        const nextVid = extractValidYouTubeId(nextReq.youtubeVideoId);
+        let nextVid = extractValidYouTubeId(nextReq.youtubeVideoId);
+        if (!nextVid) {
+          try {
+            const matchedVid = await findYouTubeMatch(nextReq.songTitle, nextReq.artist);
+            nextVid = extractValidYouTubeId(matchedVid);
+            if (nextVid) {
+              await updateRequestYoutubeVideoId(nextReq.id, nextVid);
+            }
+          } catch (matchErr: any) {
+            console.warn(`[ADMIN QUEUE] YouTube matching notice for next track "${nextReq.songTitle}":`, matchErr?.message || matchErr);
+          }
+        }
         if (nextVid) {
           playTrackVideoId(nextVid);
-        } else {
-          // Resolve video ID
-          const searchQuery = `${nextReq.songTitle} ${nextReq.artist} official audio`;
-          const results = await searchYouTubeVideos(searchQuery);
-          if (results && results.length > 0) {
-            const foundId = extractValidYouTubeId(results[0].videoId);
-            if (foundId) {
-              await updateRequestYoutubeVideoId(nextReq.id, foundId);
-              playTrackVideoId(foundId);
-            }
-          }
         }
       } else {
         console.log('[ADMIN PLAYER] No next request. Entering standby.');

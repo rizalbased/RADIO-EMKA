@@ -326,26 +326,7 @@ export default function App() {
     }
 
     console.log('[DELETE SUCCESS]', requestId);
-    setRequests((prev) => prev.filter((r) => r.id !== requestId));
-
-    // If deleted track was the currently playing track, immediately reset radioState to standby
-    if (result.was_playing || radioState?.current_request_id === requestId) {
-      console.log('[DELETE CURRENT SONG] Current track was deleted, entering standby');
-      setRadioState((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: 'standby',
-              current_request_id: null,
-              current_video_id: null,
-              current_title: null,
-              current_channel_title: null,
-              current_thumbnail_url: null,
-              started_at: null
-            }
-          : null
-      );
-    }
+    setRequests((prev) => prev.filter((r) => String(r.id) !== String(requestId)));
   };
 
   const handleClearAllRequests = async () => {
@@ -387,21 +368,31 @@ export default function App() {
   };
 
   // Source of truth for currently playing track is radioState (id=1)
-  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
-  const currentlyPlayingTrack = currentPlayingId
-    ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
-        id: currentPlayingId,
+  const activePlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused'))
+    ? radioState.current_request_id
+    : (requests.find((r) => r.status === 'Playing' || r.status === 'playing')?.id || null);
+
+  const currentlyPlayingTrack = activePlayingId
+    ? requests.find((r) => r.id === activePlayingId) || (radioState?.current_title ? {
+        id: activePlayingId,
         songTitle: radioState.current_title,
-        artist: radioState.current_channel_title || '',
+        artist: radioState.current_channel_title || 'EMKA FM',
         coverUrl: radioState.current_thumbnail_url || undefined,
         youtubeVideoId: radioState.current_video_id || undefined,
-        status: 'Playing'
+        status: radioState?.status === 'paused' ? 'Paused' : 'Playing'
       } as SongRequest : undefined)
-    : undefined;
+    : requests.find((r) => r.status === 'Playing' || r.status === 'playing');
 
-  const queuedRequestsList = requests.filter(
-    (r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId
-  );
+  const playingId = currentlyPlayingTrack?.id || activePlayingId;
+
+  const queuedRequestsList = requests
+    .filter((r) => (r.status === 'Queued' || r.status === 'queued' || r.status === 'pending' || r.status === 'Pending') && r.id !== playingId)
+    .sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeA - timeB;
+    });
+
   const nextUpTrack = queuedRequestsList.length > 0 ? queuedRequestsList[0] : undefined;
 
   return (

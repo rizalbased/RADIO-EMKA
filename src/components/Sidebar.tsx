@@ -47,8 +47,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     handlePreviousRequest
   } = useRadioEngine();
 
-  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
-  const playingTrack = (currentPlayingId ? requests.find((r) => r.id === currentPlayingId) : null) || requests.find((r) => r.status === 'Playing' || r.status === 'playing');
+  const activePlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused'))
+    ? radioState.current_request_id
+    : (requests.find((r) => r.status === 'Playing' || r.status === 'playing')?.id || null);
+
+  const playingTrack = activePlayingId
+    ? requests.find((r) => r.id === activePlayingId) || (radioState?.current_title ? {
+        id: activePlayingId,
+        songTitle: radioState.current_title,
+        artist: radioState.current_channel_title || 'EMKA FM',
+        coverUrl: radioState.current_thumbnail_url || undefined,
+        youtubeVideoId: radioState.current_video_id || undefined,
+        status: radioState?.status === 'paused' ? 'Paused' : 'Playing'
+      } as SongRequest : undefined)
+    : requests.find((r) => r.status === 'Playing' || r.status === 'playing');
   const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
 
   const menuItems: { id: MainTabType; label: string; icon: React.ReactNode; badge?: string }[] = [

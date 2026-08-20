@@ -1080,92 +1080,6 @@ Berikan respon JSON murni tanpa markdown formatting dalam bahasa Indonesia gaul/
   }
 });
 
-// Fallback engine for server side if YouTube Data API quota is exceeded
-async function searchServerFallback(query: string): Promise<{ videoId: string | null; items: any[] }> {
-  const cleanQ = query.trim();
-
-  // Try Piped instances
-  const pipedInstances = ['https://pipedapi.kavin.rocks', 'https://api.piped.yt', 'https://pipedapi.privacy.com.de'];
-  for (const baseUrl of pipedInstances) {
-    try {
-      const res = await fetch(`${baseUrl}/search?q=${encodeURIComponent(cleanQ)}&filter=videos`);
-      if (res.ok) {
-        const data: any = await res.json();
-        const items = Array.isArray(data.items) ? data.items : [];
-        if (items.length > 0) {
-          const mapped = items.map((i: any) => {
-            const match = (i.url || '').match(/v=([a-zA-Z0-9_-]{11})/);
-            const videoId = match ? match[1] : (i.id || '');
-            if (!videoId || videoId.length !== 11) return null;
-            return {
-              videoId,
-              title: i.title || '',
-              artist: i.uploaderName || '',
-              channelTitle: i.uploaderName || '',
-              thumbnail: i.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-            };
-          }).filter(Boolean);
-
-          if (mapped.length > 0) {
-            return { videoId: mapped[0].videoId, items: mapped };
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // Try Invidious instances
-  const invInstances = ['https://inv.tux.pizza', 'https://invidious.drgns.space', 'https://vid.puffyan.us'];
-  for (const baseUrl of invInstances) {
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/search?q=${encodeURIComponent(cleanQ)}&type=video`);
-      if (res.ok) {
-        const data: any = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          const mapped = data.map((i: any) => {
-            const videoId = i.videoId || '';
-            if (!videoId || videoId.length !== 11) return null;
-            return {
-              videoId,
-              title: i.title || '',
-              artist: i.author || i.uploaderName || '',
-              channelTitle: i.author || i.uploaderName || '',
-              thumbnail: i.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-            };
-          }).filter(Boolean);
-
-          if (mapped.length > 0) {
-            return { videoId: mapped[0].videoId, items: mapped };
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // iTunes Fallback
-  try {
-    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=song&limit=8`);
-    if (res.ok) {
-      const data: any = await res.json();
-      if (Array.isArray(data.results) && data.results.length > 0) {
-        const mapped = data.results.map((i: any) => ({
-          videoId: '',
-          title: i.trackName || '',
-          artist: i.artistName || '',
-          channelTitle: i.artistName || '',
-          thumbnail: i.artworkUrl100 ? i.artworkUrl100.replace('100x100bb', '600x600bb') : ''
-        })).filter((i: any) => i.title);
-
-        if (mapped.length > 0) {
-          return { videoId: null, items: mapped };
-        }
-      }
-    }
-  } catch {}
-
-  return { videoId: null, items: [] };
-}
-
 function serverDecodeHtmlEntities(str: string): string {
   if (!str) return '';
   return str
@@ -1200,18 +1114,25 @@ function scoreYouTubeCandidate(item: any, cleanTitle: string, cleanArtist: strin
   if (lowerTitle && videoTitle.includes(lowerTitle)) score += 40;
   if (lowerArtist && (videoTitle.includes(lowerArtist) || channelTitle.includes(lowerArtist))) score += 30;
   if (videoTitle.includes('official music video') || videoTitle.includes('official video') || videoTitle.includes('official audio') || videoTitle.includes('official lyric video') || videoTitle.includes('mv')) score += 15;
-  if (channelTitle.includes('topic') || channelTitle.includes('official')) score += 15;
-  if ((!lowerTitle.includes('cover') && videoTitle.includes('cover')) || (!lowerTitle.includes('karaoke') && videoTitle.includes('karaoke')) || (!lowerTitle.includes('reaction') && videoTitle.includes('reaction'))) score -= 25;
+  if (channelTitle.includes('topic') || channelTitle.includes('official') || channelTitle.includes('vevo')) score += 15;
+
+  // Penalize unwanted video types if not requested in original title
+  const unwanted = ['cover', 'karaoke', 'reaction', 'remix', 'live', 'sped up', 'slowed', 'nightcore', 'instrumental', 'playlist', 'mashup', 'full album'];
+  for (const word of unwanted) {
+    if (!lowerTitle.includes(word) && videoTitle.includes(word)) {
+      score -= 35;
+    }
+  }
 
   return score;
 }
 
-// Official YouTube Data API v3 Video Search
+// Official YouTube Data API v3 Video Search for Track Matching ONLY
 async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawArtist: string = ''): Promise<{ videoId: string | null; items: any[]; success: boolean; error?: string; message?: string }> {
   const apiKey = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
   const cleanT = serverNormalizeText(rawTitle);
   const cleanA = serverNormalizeText(rawArtist);
-  const cleanQ = `${cleanT} ${cleanA}`.replace(/\s+/g, ' ').trim() || serverNormalizeText(query);
+  const cleanQ = `"${cleanT}" "${cleanA}"`.trim() || serverNormalizeText(query);
 
   if (apiKey) {
     try {
@@ -1234,17 +1155,20 @@ async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawAr
           })).sort((a: any, b: any) => b.score - a.score);
 
           const best = scored[0];
-          if (best && best.score >= 15) {
+          // Strict verification: Require at least score 35 (valid title/artist match)
+          if (best && best.score >= 35) {
+            console.log(`[YOUTUBE MATCH] query: "${cleanQ}", videoId: ${best.item.videoId}, matchedTitle: "${best.item.title}", matchedArtist: "${best.item.artist}"`);
             return { success: true, videoId: best.item.videoId, items: scored.map(s => s.item) };
           }
         }
-        return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Tidak ditemukan video YouTube yang relevan untuk "${cleanQ}".` };
+        console.warn(`[YOUTUBE MATCH] No sufficient title/artist match found for: "${cleanQ}"`);
+        return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Video YouTube yang sesuai tidak ditemukan.` };
       } else {
         const status = res.status;
         const errText = await res.text();
         console.warn('[YouTube Data API v3] Status:', status, errText.slice(0, 200));
         if (status === 403 || status === 429 || errText.includes('quotaExceeded')) {
-          return { success: false, videoId: null, items: [], error: 'YOUTUBE_QUOTA_EXCEEDED', message: 'Kuota YouTube API sedang habis.' };
+          return { success: false, videoId: null, items: [], error: 'YOUTUBE_QUOTA_EXCEEDED', message: 'Video YouTube belum dapat dicocokkan saat ini. Silakan coba lagi nanti.' };
         }
       }
     } catch (err: any) {
@@ -1254,12 +1178,7 @@ async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawAr
     console.log('[YouTube Data API v3] API key not configured on server');
   }
 
-  // Fallback if 429 quota reached or no key configured
-  const fallback = await searchServerFallback(cleanQ);
-  if (fallback.items && fallback.items.length > 0) {
-    return { success: true, videoId: fallback.items[0].videoId || null, items: fallback.items };
-  }
-  return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Gagal menemukan video YouTube untuk "${cleanQ}".` };
+  return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: 'Video YouTube yang sesuai tidak ditemukan.' };
 }
 
 // YouTube Match Function Handler (Supports both Edge Function path & API path)

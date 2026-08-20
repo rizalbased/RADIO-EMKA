@@ -162,10 +162,14 @@ export async function updateRadioStateInDb(
 
   try {
     const nowIso = new Date().toISOString();
+    const currentVer = patch.state_version !== undefined ? patch.state_version : Date.now();
+
     const payload: any = {
       ...patch,
+      state_version: currentVer,
       updated_at: nowIso
     };
+    delete payload.current_preview_url;
 
     // 1. First attempt direct UPDATE on row id = 1
     // This strictly updates provided columns in payload, leaving ALL current_* fields untouched.
@@ -179,16 +183,38 @@ export async function updateRadioStateInDb(
     );
 
     if (!updateErr && updateData) {
-      console.log('[RADIO STATE] updated successfully via UPDATE:', patch.status, updateData.current_title);
+      console.log('[RADIO STATE] updated successfully via UPDATE:', patch.status, 'current_request_id:', updateData.current_request_id, 'title:', updateData.current_title);
       return { success: true, state: updateData as DbRadioState };
     }
 
-    // 2. Fallback if row id = 1 does not exist yet
-    payload.id = 1;
+    // 2. Fallback if row id = 1 does not exist yet or UPDATE returned no data.
+    // Fetch existing row 1 first so upsert does NOT set unprovided current_* columns to NULL!
+    const { data: existingRow } = await client
+      .from('radio_state')
+      .select('id, status, current_request_id, current_video_id, current_title, current_channel_title, current_thumbnail_url, current_time, started_at, state_version, paused_at, updated_at')
+      .eq('id', 1)
+      .maybeSingle();
+
+    const fullPayload: any = {
+      id: 1,
+      status: existingRow?.status || 'standby',
+      current_request_id: existingRow?.current_request_id || null,
+      current_video_id: existingRow?.current_video_id || null,
+      current_title: existingRow?.current_title || null,
+      current_channel_title: existingRow?.current_channel_title || null,
+      current_thumbnail_url: existingRow?.current_thumbnail_url || null,
+      started_at: existingRow?.started_at || null,
+      current_time: existingRow?.current_time || 0,
+      state_version: currentVer,
+      ...patch,
+      updated_at: nowIso
+    };
+    delete fullPayload.current_preview_url;
+
     const { data: upsertData, error: upsertErr } = await executeWithJwtRetry<DbRadioState>(async () =>
       await client
         .from('radio_state')
-        .upsert(payload, { onConflict: 'id' })
+        .upsert(fullPayload, { onConflict: 'id' })
         .select()
         .maybeSingle()
     );
@@ -198,7 +224,7 @@ export async function updateRadioStateInDb(
       return { success: false, error: upsertErr.message };
     }
 
-    console.log('[RADIO STATE] updated successfully via UPSERT:', patch.status);
+    console.log('[RADIO STATE] updated successfully via UPSERT:', patch.status, 'current_request_id:', upsertData?.current_request_id);
     return { success: true, state: upsertData as DbRadioState };
   } catch (err: any) {
     console.error('[RADIO STATE] update exception:', err);
@@ -249,6 +275,7 @@ export async function setAdminPlaySong(req: {
       .eq('id', req.id);
 
     // 3. Update radio_state (id = 1)
+    const nextVer = Date.now();
     const { error: stateErr } = await client
       .from('radio_state')
       .upsert({
@@ -259,7 +286,8 @@ export async function setAdminPlaySong(req: {
         current_title: title || null,
         current_channel_title: artist || null,
         current_thumbnail_url: thumbnail || null,
-        current_preview_url: previewUrl || null,
+        current_time: 0,
+        state_version: nextVer,
         started_at: nowIso,
         updated_at: nowIso
       }, { onConflict: 'id' });
@@ -912,7 +940,8 @@ export async function deleteDbSongRequest(requestId: string): Promise<{ success:
     return { success: false };
   }
 
-  console.log(`[REQUEST DELETE]\nrequestId=${requestId}`);
+  const strRequestId = String(requestId);
+  console.log(`[REQUEST DELETE]\nrequestId=${strRequestId}`);
 
   const client = getSupabaseClient();
   if (!client) {
@@ -921,55 +950,130 @@ export async function deleteDbSongRequest(requestId: string): Promise<{ success:
   }
 
   try {
-    // 1. Check if the deleted song is the current track in radio_state
+    // 1. Check if the deleted song is the current track in radio_state (id=1)
     const { state } = await fetchRadioStateFromDb();
-    const wasPlaying = Boolean(state && state.current_request_id === requestId);
+    const wasPlaying = Boolean(
+      state && state.current_request_id && String(state.current_request_id) === strRequestId
+    );
 
     if (wasPlaying) {
-      console.log(`[RADIO STATE] Clearing current song because active request is being deleted: ${requestId}`);
-      await updateRadioStateInDb({
-        status: 'paused',
-        current_request_id: null,
-        current_video_id: null,
-        current_title: null,
-        current_channel_title: null,
-        current_thumbnail_url: null,
-        started_at: null
-      });
+      console.log(`[RADIO STATE] Active request ${strRequestId} deleted. Determining next request in FIFO queue...`);
+      const nowIso = new Date().toISOString();
+
+      // Find next request in FIFO queue excluding deleted request
+      const { data: nextRows } = await client
+        .from('song_requests')
+        .select('*')
+        .neq('id', strRequestId)
+        .in('status', ['pending', 'queued', 'Pending', 'Queued'])
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(1);
+
+      const nextDb = (nextRows && nextRows.length > 0) ? (nextRows[0] as DbSongRequest) : null;
+
+      if (nextDb) {
+        console.log(`[RADIO STATE] Advancing to next request ${nextDb.id} after deleting active request ${strRequestId}`);
+        await client
+          .from('song_requests')
+          .update({ status: 'playing', played_at: null, updated_at: nowIso })
+          .eq('id', nextDb.id);
+
+        const nextThumb = nextDb.thumbnail_url || (nextDb.video_id ? `https://i.ytimg.com/vi/${nextDb.video_id}/hqdefault.jpg` : null);
+        await updateRadioStateInDb({
+          status: 'playing',
+          current_request_id: String(nextDb.id),
+          current_video_id: nextDb.video_id || null,
+          current_title: nextDb.title || null,
+          current_channel_title: nextDb.channel_title || null,
+          current_thumbnail_url: nextThumb,
+          current_time: 0,
+          started_at: nowIso
+        });
+      } else {
+        console.log(`[RADIO STATE] No remaining requests in queue. Entering standby.`);
+        await setRadioStandbyInDb();
+      }
     }
 
     // 2. Perform direct delete using primary key ID
-    const { error: directErr } = await executeWithJwtRetry(async () =>
+    let deleteSuccess = false;
+
+    // Try direct string ID delete
+    const { data: directDeleted, error: directErr } = await executeWithJwtRetry(async () =>
       await client
         .from('song_requests')
         .delete()
-        .eq('id', requestId)
+        .eq('id', strRequestId)
+        .select()
     );
 
-    if (directErr) {
-      console.warn('[REQUEST DELETE] Direct delete error, trying RPC fallback:', directErr.message);
-      // RPC fallback if RLS or triggers require RPC
-      const { data: rpcData, error: rpcErr } = await client.rpc('delete_song_request', {
-        p_request_id: requestId
-      });
-      if (rpcErr && directErr) {
-        console.error('[REQUEST DELETE] Delete failed:', directErr.message || rpcErr.message);
+    if (directDeleted && directDeleted.length > 0) {
+      deleteSuccess = true;
+    } else {
+      if (directErr) {
+        console.warn('[REQUEST DELETE] Direct string delete error:', directErr.message);
+      }
+      // Try numeric ID if id is integer in Postgres
+      if (/^\d+$/.test(strRequestId)) {
+        const numId = Number(strRequestId);
+        const { data: numDeleted } = await executeWithJwtRetry(async () =>
+          await client
+            .from('song_requests')
+            .delete()
+            .eq('id', numId)
+            .select()
+        );
+        if (numDeleted && numDeleted.length > 0) {
+          deleteSuccess = true;
+        }
+      }
+    }
+
+    // Try RPC fallback if direct delete returned 0 rows
+    if (!deleteSuccess) {
+      try {
+        const { error: rpcErr } = await client.rpc('delete_song_request', {
+          p_request_id: strRequestId
+        });
+        if (!rpcErr) {
+          deleteSuccess = true;
+        }
+      } catch {}
+    }
+
+    // 3. Database verification: Pastikan row tidak lagi aktif
+    const { data: verifyData } = await client
+      .from('song_requests')
+      .select('id, status')
+      .eq('id', strRequestId);
+
+    if (verifyData && verifyData.length > 0) {
+      // Direct DELETE was blocked by RLS or triggers. Fallback: update status = 'cancelled' to remove from queue
+      console.warn('[REQUEST DELETE] Direct DELETE blocked by RLS. Updating status to cancelled as fallback...');
+      await client
+        .from('song_requests')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', strRequestId);
+
+      // Re-verify
+      const { data: verifyData2 } = await client
+        .from('song_requests')
+        .select('id, status')
+        .eq('id', strRequestId);
+
+      if (verifyData2 && verifyData2.length > 0 && verifyData2[0].status !== 'cancelled' && verifyData2[0].status !== 'rejected') {
+        console.error('[REQUEST DELETE] Database row still active after delete attempt:', strRequestId);
         return { success: false, was_playing: wasPlaying };
       }
     }
 
-    // 3. Database verification: Pastikan row benar-benar hilang dari database
-    const { data: verifyData } = await client
-      .from('song_requests')
-      .select('id')
-      .eq('id', requestId);
+    // Notify backend local server if available
+    try {
+      fetch(`/api/sheets/request/${encodeURIComponent(strRequestId)}`, { method: 'DELETE' }).catch(() => {});
+    } catch {}
 
-    if (verifyData && verifyData.length > 0) {
-      console.error('[REQUEST DELETE] Database row still exists after delete:', requestId);
-      return { success: false, was_playing: wasPlaying };
-    }
-
-    console.log(`[REQUEST DELETE SUCCESS]\nrequestId=${requestId}`);
+    console.log(`[REQUEST DELETE SUCCESS]\nrequestId=${strRequestId}`);
     return { success: true, was_playing: wasPlaying };
   } catch (err: any) {
     console.error('[REQUEST DELETE] Exception during delete:', err);

@@ -149,6 +149,8 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
     const cleanT = decodeHtmlEntities(track.trackName);
     const cleanA = decodeHtmlEntities(track.artistName);
 
+    console.log('[ITUNES SELECT] trackId:', track.trackId, 'title:', cleanT, 'artist:', cleanA);
+
     setSongTitle(cleanT);
     setArtist(cleanA);
     setAlbum(track.collectionName ? decodeHtmlEntities(track.collectionName) : '');
