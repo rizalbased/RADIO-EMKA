@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Music, Send, Sparkles, Search, User, School, HeartHandshake, MessageSquare, AlertCircle, CheckCircle2, Disc, Play } from 'lucide-react';
-import { MoodTag, YouTubeSearchResult } from '../types';
-import { analyzeVibeWithAi, searchYouTubeVideos } from '../services/api';
+import { MoodTag, ItunesSearchResult } from '../types';
+import { analyzeVibeWithAi, searchItunesSongs } from '../services/api';
 import { SongPreviewCard } from './SongPreviewCard';
 import { decodeHtmlEntities } from '../lib/textUtils';
 
@@ -16,6 +16,10 @@ interface SongRequestFormProps {
     mood: MoodTag;
     coverUrl?: string;
     previewUrl?: string;
+    album?: string;
+    genre?: string;
+    itunesTrackId?: string | number;
+    itunesCollectionId?: string | number;
     youtubeVideoId?: string;
   }) => Promise<void>;
   isSubmitting: boolean;
@@ -41,6 +45,10 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
   const [className, setClassName] = useState('');
   const [songTitle, setSongTitle] = useState('');
   const [artist, setArtist] = useState('');
+  const [album, setAlbum] = useState('');
+  const [genre, setGenre] = useState('');
+  const [itunesTrackId, setItunesTrackId] = useState<string | number>('');
+  const [itunesCollectionId, setItunesCollectionId] = useState<string | number>('');
   const [targetPerson, setTargetPerson] = useState('');
   const [message, setMessage] = useState('');
   const [mood, setMood] = useState<MoodTag>('💌 Secret Confession');
@@ -48,9 +56,9 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
   const [previewUrl, setPreviewUrl] = useState('');
   const [youtubeVideoId, setYoutubeVideoId] = useState('');
 
-  // YouTube Search State
+  // iTunes Search State
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<YouTubeSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<ItunesSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [showSearchResults, setShowSearchResults] = useState(false);
@@ -73,8 +81,16 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
     return match && match[1] ? match[1] : null;
   };
 
-  // Debounced YouTube music search via YouTube Data API v3 & Fallback Engines
+  // Ref to skip search when track is selected
+  const skipSearchRef = useRef(false);
+
+  // Debounced iTunes music search
   useEffect(() => {
+    if (skipSearchRef.current) {
+      skipSearchRef.current = false;
+      return;
+    }
+
     if (!searchQuery || searchQuery.trim().length < 2) {
       setSearchResults([]);
       setShowSearchResults(false);
@@ -90,7 +106,7 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       setShowSearchResults(false);
       setSearchError('');
 
-      // Auto-fetch video metadata via YouTube oEmbed (no API key / quota required!)
+      // Auto-fetch video metadata via YouTube oEmbed
       fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${extractedId}`)
         .then(res => res.json())
         .then(data => {
@@ -105,33 +121,38 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       setIsSearching(true);
       setSearchError('');
       try {
-        const results = await searchYouTubeVideos(searchQuery);
+        const results = await searchItunesSongs(searchQuery);
         setSearchResults(results);
         if (results.length > 0) {
           setShowSearchResults(true);
           setSearchError('');
         } else {
           setShowSearchResults(false);
-          setSearchError('Gagal mencari lagu atau hasil tidak ditemukan. Kamu dapat menempelkan (paste) Link YouTube lagu secara langsung.');
+          setSearchError('Tidak ditemukan lagu yang sesuai.');
         }
       } catch (err: any) {
-        console.warn('[YOUTUBE SEARCH ERROR]:', err);
+        console.warn('[ITUNES SEARCH ERROR]:', err);
         setShowSearchResults(false);
-        setSearchError('Gagal mencari lagu. Silakan coba tempelkan Link YouTube secara langsung.');
+        setSearchError(err?.message || 'Pencarian lagu sedang mengalami gangguan.');
       } finally {
         setIsSearching(false);
       }
-    }, 400);
+    }, 450);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const handleSelectTrack = (track: YouTubeSearchResult) => {
-    setSongTitle(track.title);
-    setArtist(track.channelTitle);
-    setCoverUrl(track.thumbnail);
-    setYoutubeVideoId(track.videoId);
-    setSearchQuery(`${track.title} - ${track.channelTitle}`);
+  const handleSelectTrack = (track: ItunesSearchResult) => {
+    skipSearchRef.current = true;
+    setSongTitle(track.trackName);
+    setArtist(track.artistName);
+    setAlbum(track.collectionName || '');
+    setCoverUrl(track.artworkUrl600 || track.artworkUrl100);
+    setPreviewUrl(track.previewUrl || '');
+    setItunesTrackId(track.trackId);
+    setItunesCollectionId(track.collectionId || '');
+    setGenre(track.primaryGenreName || '');
+    setSearchQuery(`${track.trackName} - ${track.artistName}`);
     setShowSearchResults(false);
   };
 
@@ -185,6 +206,10 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
         mood,
         coverUrl: coverUrl || (youtubeVideoId ? `https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'),
         previewUrl,
+        album,
+        genre,
+        itunesTrackId,
+        itunesCollectionId,
         youtubeVideoId
       });
 
@@ -195,6 +220,10 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       setClassName('');
       setSongTitle('');
       setArtist('');
+      setAlbum('');
+      setGenre('');
+      setItunesTrackId('');
+      setItunesCollectionId('');
       setTargetPerson('');
       setMessage('');
       setSearchQuery('');
@@ -282,21 +311,22 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
             </div>
           </div>
 
-          {/* Step 2: Song Title Search with YouTube Data API v3 */}
+          {/* Step 2: Song Title Search with iTunes Search API */}
           <div className="relative">
             <label className="block text-xs font-black text-primary mb-2 flex items-center justify-between uppercase tracking-wider">
               <span className="flex items-center gap-1.5">
-                <Search className="w-4 h-4 text-blue" />
+                <Search className="w-4 h-4 text-pink" />
                 <span>Cari Judul Lagu / Link YouTube <span className="text-pink">*</span></span>
               </span>
-              <span className="text-[10px] text-rose-500 font-extrabold bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-500/20">⚡ YouTube Search</span>
+              <span className="text-[10px] text-pink font-extrabold bg-pink/10 px-2 py-0.5 rounded-full border border-pink/20">🎵 iTunes Search</span>
             </label>
 
             <input
               type="text"
-              placeholder="Contoh: Faded Alan Walker atau link YouTube..."
+              placeholder="Contoh: Nina, Alan Walker, atau link YouTube..."
               value={searchQuery}
               onChange={(e) => {
+                skipSearchRef.current = false;
                 setSearchQuery(e.target.value);
                 setSongTitle(e.target.value);
               }}
@@ -305,9 +335,9 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
 
             {/* Helper Hint / Search Status */}
             {isSearching && (
-              <div className="mt-1.5 text-[11px] font-bold text-blue flex items-center gap-1.5 px-1">
-                <div className="w-3 h-3 border-2 border-blue border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                <span>Mencari video di YouTube...</span>
+              <div className="mt-1.5 text-[11px] font-bold text-pink flex items-center gap-1.5 px-1">
+                <div className="w-3 h-3 border-2 border-pink border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <span>Mencari lagu di iTunes...</span>
               </div>
             )}
 
@@ -324,39 +354,41 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
               </p>
             )}
 
-            {/* YouTube Search Autocomplete Results */}
+            {/* iTunes Search Autocomplete Results */}
             {showSearchResults && searchResults.length > 0 && (
-              <div className="absolute z-30 left-0 right-0 mt-2 bg-card border-2 border-primary rounded-2xl shadow-pop-dark overflow-hidden max-h-64 overflow-y-auto">
+              <div className="absolute z-30 left-0 right-0 mt-2 bg-card border-2 border-primary rounded-2xl shadow-pop-dark overflow-hidden max-h-72 overflow-y-auto">
                 <div className="px-3 py-2 bg-neon text-[11px] font-black text-black flex justify-between items-center">
-                  <span>PILIH VIDEO DARI YOUTUBE</span>
+                  <span>PILIH LAGU DARI ITUNES</span>
                   <span>{searchResults.length} Hasil</span>
                 </div>
                 {searchResults.map((t, idx) => (
                   <button
-                    key={`${t.videoId}-${idx}`}
+                    key={`${t.trackId}-${idx}`}
                     type="button"
                     onClick={() => handleSelectTrack(t)}
                     className="w-full text-left px-4 py-2.5 hover:bg-elevated flex items-center space-x-3 border-b border-subtle transition group"
                   >
-                    <div className="w-12 h-8 rounded-lg overflow-hidden bg-black flex-shrink-0 relative border border-subtle">
-                      {t.thumbnail ? (
-                        <img src={t.thumbnail} alt={t.title} className="w-full h-full object-cover" />
+                    <div className="w-10 h-10 rounded-lg overflow-hidden bg-black flex-shrink-0 relative border border-subtle">
+                      {t.artworkUrl100 ? (
+                        <img src={t.artworkUrl100} alt={t.trackName} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-xs font-bold text-white bg-slate-800">
-                          <Play className="w-3 h-3" />
+                          <Music className="w-4 h-4 text-pink" />
                         </div>
                       )}
                     </div>
-                    <div className="truncate flex-1">
-                      <p className="text-xs font-black text-primary group-hover:text-pink truncate">{t.title}</p>
-                      <p className="text-[11px] text-secondary font-bold truncate">{t.channelTitle}</p>
+                    <div className="truncate flex-1 min-w-0">
+                      <p className="text-xs font-black text-primary group-hover:text-pink truncate">{t.trackName}</p>
+                      <p className="text-[11px] text-secondary font-bold truncate">
+                        {t.artistName} {t.collectionName ? `• ${t.collectionName}` : ''}
+                      </p>
                     </div>
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Manual Fields & Selected YouTube Video indicator */}
+            {/* Manual Fields & Selected track indicator */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <input
                 type="text"
@@ -374,10 +406,10 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
               />
             </div>
 
-            {youtubeVideoId && (
+            {(songTitle && artist && (previewUrl || youtubeVideoId || itunesTrackId)) && (
               <div className="mt-2 text-[11px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20">
                 <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
-                <span>YouTube Video ID Terpilih: <code className="font-mono">{youtubeVideoId}</code></span>
+                <span>Lagu Terpilih: <strong>{songTitle} - {artist}</strong></span>
               </div>
             )}
           </div>

@@ -164,6 +164,8 @@ export async function setAdminPlaySong(req: {
   artist?: string;
   thumbnail_url?: string;
   coverUrl?: string;
+  preview_url?: string;
+  previewUrl?: string;
 }): Promise<{ success: boolean; error?: string }> {
   console.log('[PLAY REQUEST]', req.id);
   const client = getSupabaseClient();
@@ -175,6 +177,7 @@ export async function setAdminPlaySong(req: {
     const title = req.title || req.songTitle || '';
     const artist = req.channel_title || req.artist || '';
     const thumbnail = req.thumbnail_url || req.coverUrl || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '');
+    const previewUrl = req.preview_url || req.previewUrl || '';
 
     // 1. Update song_requests: mark previously playing requests as 'played'
     await client
@@ -199,6 +202,7 @@ export async function setAdminPlaySong(req: {
         current_title: title || null,
         current_channel_title: artist || null,
         current_thumbnail_url: thumbnail || null,
+        current_preview_url: previewUrl || null,
         started_at: nowIso,
         updated_at: nowIso
       }, { onConflict: 'id' });
@@ -539,6 +543,10 @@ export async function insertSongRequest(data: {
   mood: string;
   coverUrl?: string;
   previewUrl?: string;
+  album?: string;
+  genre?: string;
+  itunesTrackId?: string | number;
+  itunesCollectionId?: string | number;
   youtubeVideoId?: string;
 }): Promise<{ success: boolean; request?: SongRequest; error?: string }> {
   const client = getSupabaseClient();
@@ -626,12 +634,20 @@ export async function insertSongRequest(data: {
     // 6. Direct INSERT into public.song_requests with exact database mapping matching existing columns
     const insertPayload: any = {
       user_id: currentUser.id,
-      video_id: cleanVideoId,
+      video_id: cleanVideoId || null,
       title: normTitle,
       channel_title: normArtist || null,
       thumbnail_url: data.coverUrl || (cleanVideoId ? `https://i.ytimg.com/vi/${cleanVideoId}/hqdefault.jpg` : null),
+      preview_url: data.previewUrl || null,
+      album: data.album || null,
+      genre: data.genre || null,
+      itunes_track_id: data.itunesTrackId ? String(data.itunesTrackId) : null,
+      itunes_collection_id: data.itunesCollectionId ? String(data.itunesCollectionId) : null,
       requester_name: data.studentName.trim(),
       class_name: data.className ? data.className.trim() : null,
+      target_person: data.targetPerson ? data.targetPerson.trim() : null,
+      message: data.message ? data.message.trim() : null,
+      mood: data.mood || null,
       status: 'pending'
     };
 

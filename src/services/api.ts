@@ -1,4 +1,4 @@
-import { SheetConfig, SongRequest, DbRadioState, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult } from '../types';
+import { SheetConfig, SongRequest, DbRadioState, AiVibeAnalysis, RadioHost, LiveRadioState, MoodTag, YouTubeSearchResult, ItunesSearchResult } from '../types';
 import { decodeHtmlEntities } from '../lib/textUtils';
 import {
   fetchSongRequestsFromDb,
@@ -24,7 +24,10 @@ import {
 } from './supabaseService';
 import {
   isSupabaseConfigured,
-  getAdminSessionStatus
+  getAdminSessionStatus,
+  getSupabaseClient,
+  sanitizeSupabaseUrl,
+  sanitizeSupabaseKey
 } from '../lib/supabaseClient';
 
 export {
@@ -299,6 +302,10 @@ export async function submitSongRequest(data: {
   mood: string;
   coverUrl?: string;
   previewUrl?: string;
+  album?: string;
+  genre?: string;
+  itunesTrackId?: string | number;
+  itunesCollectionId?: string | number;
   youtubeVideoId?: string;
 }): Promise<{ success: boolean; request?: SongRequest; requests: SongRequest[]; error?: string }> {
   console.log(`[EMKA REQUEST] submit title="${data.songTitle.trim()}" artist="${data.artist.trim()}"`);
@@ -358,133 +365,180 @@ export async function updateRequestYoutubeVideoId(requestId: string, youtubeVide
   return { success: true, requests: current };
 }
 
-async function searchFallbackPublicEngines(cleanQ: string): Promise<YouTubeSearchResult[]> {
-  console.log(`[YOUTUBE SEARCH FALLBACK] Querying public engines for "${cleanQ}"...`);
+// iTunes Search cache store
+interface ItunesCacheItem {
+  timestamp: number;
+  items: ItunesSearchResult[];
+  errorMessage?: string;
+}
 
-  // 1. Try Piped API public instances
-  const pipedInstances = [
-    'https://pipedapi.kavin.rocks',
-    'https://api.piped.yt',
-    'https://pipedapi.privacy.com.de'
-  ];
+const itunesMemoryCache = new Map<string, ItunesCacheItem>();
 
-  for (const baseUrl of pipedInstances) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`${baseUrl}/search?q=${encodeURIComponent(cleanQ)}&filter=videos`, { signal: controller.signal });
-      clearTimeout(timer);
+export async function searchItunesSongs(query: string): Promise<ItunesSearchResult[]> {
+  if (!query || !query.trim()) return [];
+  const rawQ = query.trim();
+  const normKey = rawQ.toLowerCase();
+  const now = Date.now();
 
-      if (res.ok) {
-        const data = await res.json();
-        const items = Array.isArray(data.items) ? data.items : [];
-        if (items.length > 0) {
-          const mapped: YouTubeSearchResult[] = items
-            .map((item: any) => {
-              const url = item.url || '';
-              const match = url.match(/v=([a-zA-Z0-9_-]{11})/);
-              const videoId = match ? match[1] : (item.id || '');
-              if (!videoId || videoId.length !== 11) return null;
-
-              return {
-                videoId,
-                title: decodeHtmlEntities(item.title || ''),
-                channelTitle: decodeHtmlEntities(item.uploaderName || item.artist || ''),
-                thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-              };
-            })
-            .filter(Boolean) as YouTubeSearchResult[];
-
-          if (mapped.length > 0) {
-            console.log(`[YOUTUBE SEARCH FALLBACK] Piped API (${baseUrl}) returned ${mapped.length} items`);
-            return mapped;
-          }
-        }
-      }
-    } catch {}
+  // Check in-memory cache
+  const memCached = itunesMemoryCache.get(normKey);
+  if (memCached && now - memCached.timestamp < SEARCH_CACHE_TTL_MS) {
+    if (memCached.errorMessage) {
+      throw new Error(memCached.errorMessage);
+    }
+    return memCached.items;
   }
 
-  // 2. Try Invidious API public instances
-  const invidiousInstances = [
-    'https://inv.tux.pizza',
-    'https://invidious.drgns.space',
-    'https://vid.puffyan.us'
-  ];
-
-  for (const baseUrl of invidiousInstances) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`${baseUrl}/api/v1/search?q=${encodeURIComponent(cleanQ)}&type=video`, { signal: controller.signal });
-      clearTimeout(timer);
-
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          const mapped: YouTubeSearchResult[] = data
-            .map((item: any) => {
-              const videoId = item.videoId || '';
-              if (!videoId || videoId.length !== 11) return null;
-
-              return {
-                videoId,
-                title: decodeHtmlEntities(item.title || ''),
-                channelTitle: decodeHtmlEntities(item.author || item.uploaderName || ''),
-                thumbnail: item.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-              };
-            })
-            .filter(Boolean) as YouTubeSearchResult[];
-
-          if (mapped.length > 0) {
-            console.log(`[YOUTUBE SEARCH FALLBACK] Invidious API (${baseUrl}) returned ${mapped.length} items`);
-            return mapped;
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // 3. iTunes Search API Fallback
+  // Check localStorage cache
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=song&limit=8`, { signal: controller.signal });
-    clearTimeout(timer);
-
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.results) && data.results.length > 0) {
-        const mapped: YouTubeSearchResult[] = data.results
-          .map((item: any) => {
-            const songName = item.trackName || '';
-            const artistName = item.artistName || '';
-            if (!songName) return null;
-
-            return {
-              videoId: '',
-              title: decodeHtmlEntities(songName),
-              channelTitle: decodeHtmlEntities(artistName),
-              thumbnail: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : ''
-            };
-          })
-          .filter(Boolean) as YouTubeSearchResult[];
-
-        if (mapped.length > 0) {
-          console.log(`[YOUTUBE SEARCH FALLBACK] iTunes API returned ${mapped.length} songs`);
-          return mapped;
+    const lsRaw = localStorage.getItem(`itunes_cache_${normKey}`);
+    if (lsRaw) {
+      const parsed: ItunesCacheItem = JSON.parse(lsRaw);
+      if (parsed && now - parsed.timestamp < SEARCH_CACHE_TTL_MS) {
+        if (parsed.errorMessage) {
+          throw new Error(parsed.errorMessage);
         }
+        itunesMemoryCache.set(normKey, parsed);
+        return parsed.items;
       }
     }
   } catch {}
 
-  return [];
+  const normalizeItunesResult = (item: any): ItunesSearchResult | null => {
+    if (!item || (!item.trackName && !item.artistName)) return null;
+    const rawArtwork = item.artworkUrl100 || item.artworkUrl60 || '';
+    const artwork600 = rawArtwork ? rawArtwork.replace('100x100bb', '600x600bb').replace('60x60bb', '600x600bb') : '';
+
+    return {
+      trackId: item.trackId || String(Date.now() + Math.random()),
+      collectionId: item.collectionId,
+      trackName: decodeHtmlEntities(item.trackName || 'Tanpa Judul'),
+      artistName: decodeHtmlEntities(item.artistName || 'Artis Tidak Diketahui'),
+      collectionName: item.collectionName ? decodeHtmlEntities(item.collectionName) : undefined,
+      artworkUrl100: rawArtwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
+      artworkUrl600: artwork600 || rawArtwork,
+      previewUrl: item.previewUrl || undefined,
+      primaryGenreName: item.primaryGenreName || undefined
+    };
+  };
+
+  // 1. Direct fetch to iTunes Search API
+  try {
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(rawQ)}&entity=song&limit=10`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.results && Array.isArray(data.results)) {
+        const results = data.results.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
+        if (results.length > 0) {
+          const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
+          itunesMemoryCache.set(normKey, cacheEntry);
+          try { localStorage.setItem(`itunes_cache_${normKey}`, JSON.stringify(cacheEntry)); } catch {}
+          return results;
+        } else {
+          const errCacheEntry: ItunesCacheItem = { timestamp: now, items: [], errorMessage: 'Tidak ditemukan lagu yang sesuai.' };
+          itunesMemoryCache.set(normKey, errCacheEntry);
+          throw new Error('Tidak ditemukan lagu yang sesuai.');
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err?.message === 'Tidak ditemukan lagu yang sesuai.') {
+      throw err;
+    }
+    console.warn('[ITUNES SEARCH] Direct fetch notice:', err?.message || err);
+  }
+
+  // 2. Fallback to Express backend proxy or Supabase Edge function
+  try {
+    const proxyRes = await fetch(`/api/itunes/search?term=${encodeURIComponent(rawQ)}`);
+    if (proxyRes.ok) {
+      const proxyData = await proxyRes.json();
+      const rawResults = proxyData.results || proxyData.items || [];
+      if (Array.isArray(rawResults) && rawResults.length > 0) {
+        const results = rawResults.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
+        if (results.length > 0) {
+          const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
+          itunesMemoryCache.set(normKey, cacheEntry);
+          try { localStorage.setItem(`itunes_cache_${normKey}`, JSON.stringify(cacheEntry)); } catch {}
+          return results;
+        }
+      }
+    }
+  } catch (proxyErr) {
+    console.warn('[ITUNES SEARCH] Proxy fetch notice:', proxyErr);
+  }
+
+  const errorMsg = 'Pencarian lagu sedang mengalami gangguan.';
+  throw new Error(errorMsg);
+}
+
+// Search cache store (In-memory + localStorage backup)
+interface SearchCacheItem {
+  timestamp: number;
+  items: YouTubeSearchResult[];
+  errorMessage?: string;
+}
+
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
+const searchMemoryCache = new Map<string, SearchCacheItem>();
+
+function extractYouTubeVideoId(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  const match = trimmed.match(regExp);
+  return match && match[1] ? match[1] : null;
 }
 
 export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchResult[]> {
   if (!query || !query.trim()) return [];
-  const cleanQ = query.trim();
+  const rawQ = query.trim();
 
-  console.log(`[YOUTUBE SEARCH] query="${cleanQ}"`);
+  // 1. Direct YouTube URL or 11-char Video ID check
+  const directId = extractYouTubeVideoId(rawQ);
+  if (directId) {
+    return [
+      {
+        videoId: directId,
+        title: "Link YouTube Video",
+        channelTitle: "YouTube",
+        thumbnail: `https://i.ytimg.com/vi/${directId}/hqdefault.jpg`
+      }
+    ];
+  }
+
+  // 2. Normalized query & Cache lookup (TTL: 10 mins)
+  const normKey = rawQ.toLowerCase();
+  const now = Date.now();
+
+  // Check in-memory cache
+  const memCached = searchMemoryCache.get(normKey);
+  if (memCached && now - memCached.timestamp < SEARCH_CACHE_TTL_MS) {
+    if (memCached.errorMessage) {
+      throw new Error(memCached.errorMessage);
+    }
+    console.log(`[YOUTUBE SEARCH] Returning in-memory cached results for "${normKey}"`);
+    return memCached.items;
+  }
+
+  // Check localStorage cache
+  try {
+    const lsRaw = localStorage.getItem(`yt_cache_${normKey}`);
+    if (lsRaw) {
+      const parsed: SearchCacheItem = JSON.parse(lsRaw);
+      if (parsed && now - parsed.timestamp < SEARCH_CACHE_TTL_MS) {
+        if (parsed.errorMessage) {
+          throw new Error(parsed.errorMessage);
+        }
+        searchMemoryCache.set(normKey, parsed);
+        console.log(`[YOUTUBE SEARCH] Returning localStorage cached results for "${normKey}"`);
+        return parsed.items;
+      }
+    }
+  } catch {}
 
   const normalizeItem = (item: any): YouTubeSearchResult | null => {
     if (!item) return null;
@@ -509,27 +563,27 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
     };
   };
 
-  // 1. Try proxy endpoint /api/youtube/search?q=... (works when Express backend server is running)
+  // 3. Try Express Backend Proxy `/api/youtube/search?q=...` first
   try {
-    const proxyRes = await fetch(`/api/youtube/search?q=${encodeURIComponent(cleanQ)}`);
-    console.log(`[YOUTUBE SEARCH] proxy status=${proxyRes.status}`);
-
+    const proxyRes = await fetch(`/api/youtube/search?q=${encodeURIComponent(rawQ)}`);
     if (proxyRes.ok) {
-      const data = await proxyRes.json();
-      const rawItems = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+      const proxyData = await proxyRes.json();
+      const rawItems = Array.isArray(proxyData.items) ? proxyData.items : (Array.isArray(proxyData) ? proxyData : []);
       if (rawItems.length > 0) {
         const results = rawItems.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
         if (results.length > 0) {
-          console.log(`[YOUTUBE SEARCH] proxy results=${results.length}`);
+          const cacheEntry: SearchCacheItem = { timestamp: now, items: results };
+          searchMemoryCache.set(normKey, cacheEntry);
+          try { localStorage.setItem(`yt_cache_${normKey}`, JSON.stringify(cacheEntry)); } catch {}
           return results;
         }
       }
     }
   } catch (err: any) {
-    console.log('[YOUTUBE SEARCH] Proxy fetch notice (normal for static deployments):', err?.message || err);
+    console.log('[YOUTUBE SEARCH] Proxy fetch notice:', err?.message || err);
   }
 
-  // 2. Direct client call to Google YouTube Data API v3
+  // 4. Direct Call to Official YouTube Data API v3
   const apiKey =
     (import.meta as any).env?.VITE_YOUTUBE_API_KEY ||
     (import.meta as any).env?.YOUTUBE_API_KEY ||
@@ -537,34 +591,46 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
 
   if (apiKey) {
     try {
-      const directUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
-      const directRes = await fetch(directUrl);
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=8&q=${encodeURIComponent(rawQ)}&key=${apiKey}`;
+      const res = await fetch(url);
 
-      if (directRes.ok) {
-        const data = await directRes.json();
+      if (res.ok) {
+        const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
           const results = data.items.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
           if (results.length > 0) {
-            console.log(`[YOUTUBE SEARCH] direct results=${results.length}`);
+            const cacheEntry: SearchCacheItem = { timestamp: now, items: results };
+            searchMemoryCache.set(normKey, cacheEntry);
+            try { localStorage.setItem(`yt_cache_${normKey}`, JSON.stringify(cacheEntry)); } catch {}
             return results;
           }
         }
-      } else {
-        const status = directRes.status;
-        const errText = await directRes.text();
-        if (status === 429 || status === 403 || errText.includes('quotaExceeded') || errText.includes('RESOURCE_EXHAUSTED')) {
-          console.warn(`[YOUTUBE SEARCH] YouTube Data API Quota Exceeded (status ${status}). Activating fallback public search engines...`);
-        } else {
-          console.warn(`[YOUTUBE SEARCH] Direct API error status ${status}:`, errText);
-        }
+        return [];
       }
+
+      const status = res.status;
+      const errText = await res.text();
+      let errMsg = 'Gagal mencari lagu dari YouTube. Silakan coba lagi.';
+      if (status === 429 || status === 403 || errText.includes('quotaExceeded') || errText.includes('RESOURCE_EXHAUSTED') || errText.includes('rateLimitExceeded')) {
+        errMsg = 'Kuota YouTube API sedang habis. Silakan gunakan link YouTube langsung atau gunakan API key YouTube dengan quota yang tersedia.';
+      } else if (status === 400) {
+        errMsg = 'Kata kunci pencarian tidak valid.';
+      }
+
+      const errCacheEntry: SearchCacheItem = { timestamp: now, items: [], errorMessage: errMsg };
+      searchMemoryCache.set(normKey, errCacheEntry);
+      throw new Error(errMsg);
     } catch (err: any) {
-      console.warn('[YOUTUBE SEARCH] Direct search exception:', err?.message || err);
+      if (err?.message && (err.message.includes('Kuota') || err.message.includes('tidak valid'))) {
+        throw err;
+      }
+      console.warn('[YOUTUBE SEARCH] Direct API exception:', err?.message || err);
     }
   }
 
-  // 3. Fallback search engine (Piped / Invidious / iTunes)
-  return await searchFallbackPublicEngines(cleanQ);
+  // If no API key or API call failed
+  const finalErrMsg = 'Gagal mencari lagu. Silakan coba tempelkan Link YouTube secara langsung.';
+  throw new Error(finalErrMsg);
 }
 
 export async function likeRequest(requestId: string): Promise<{ success: boolean; likes: number }> {

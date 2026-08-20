@@ -11,10 +11,15 @@ export type RequestStatus = 'Queued' | 'Playing' | 'Played' | 'pending' | 'playi
 export interface DbSongRequest {
   id: string;
   user_id?: string | null;
-  video_id: string;
+  video_id?: string | null;
   title: string;
   channel_title: string;
   thumbnail_url?: string | null;
+  preview_url?: string | null;
+  album?: string | null;
+  genre?: string | null;
+  itunes_track_id?: string | number | null;
+  itunes_collection_id?: string | number | null;
   requester_name: string;
   class_name: string;
   target_person?: string | null;
@@ -39,6 +44,10 @@ export interface SongRequest {
   mood: MoodTag;
   coverUrl?: string;
   previewUrl?: string;
+  album?: string;
+  genre?: string;
+  itunesTrackId?: string | number;
+  itunesCollectionId?: string | number;
   status: RequestStatus;
   likes: number;
   youtubeVideoId?: string;
@@ -66,6 +75,11 @@ export function mapDbRequestToSongRequest(db: DbSongRequest): SongRequest {
     message: decodeHtmlEntities(db.message) || 'Salam hangat!',
     mood: (db.mood as MoodTag) || '🎧 Vibe Check',
     coverUrl: db.thumbnail_url || (db.video_id ? `https://i.ytimg.com/vi/${db.video_id}/hqdefault.jpg` : undefined),
+    previewUrl: db.preview_url || undefined,
+    album: db.album || undefined,
+    genre: db.genre || undefined,
+    itunesTrackId: db.itunes_track_id || undefined,
+    itunesCollectionId: db.itunes_collection_id || undefined,
     status: uiStatus,
     likes: db.likes || 0,
     youtubeVideoId: db.video_id || undefined,
@@ -89,6 +103,18 @@ export interface YouTubeSearchResult {
   title: string;
   channelTitle: string;
   thumbnail: string;
+}
+
+export interface ItunesSearchResult {
+  trackId: number | string;
+  collectionId?: number | string;
+  trackName: string;
+  artistName: string;
+  collectionName?: string;
+  artworkUrl100: string;
+  artworkUrl600?: string;
+  previewUrl?: string;
+  primaryGenreName?: string;
 }
 
 export interface AiVibeAnalysis {
@@ -116,6 +142,7 @@ export interface DbRadioState {
   current_title?: string | null;
   current_channel_title?: string | null;
   current_thumbnail_url?: string | null;
+  current_preview_url?: string | null;
   started_at?: string | null;
   updated_at?: string | null;
 }
