@@ -9,21 +9,25 @@ export function decodeHtmlEntities(text: string | null | undefined): string {
   // Fast path if text doesn't contain '&'
   if (!text.includes('&')) return text;
 
+  let result = text;
+
   // Browser DOM parser approach for complete HTML5 entity support
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     try {
       const doc = new DOMParser().parseFromString(text, 'text/html');
       const decoded = doc.documentElement.textContent || doc.body.textContent;
-      if (decoded) return decoded;
+      if (decoded) {
+        result = decoded;
+      }
     } catch {
       // Fallback below
     }
   }
 
-  // Regex fallback
-  return text
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
+  // Double-pass regex fallback to handle double-encoded or leftover entities (like &#39;, &#039;, &amp;#39;)
+  return result
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/&apos;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, '&')
@@ -31,7 +35,8 @@ export function decodeHtmlEntities(text: string | null | undefined): string {
     .replace(/&gt;/g, '>')
     .replace(/&#x2F;/g, '/')
     .replace(/&#47;/g, '/')
-    .replace(/&nbsp;/g, ' ');
+    .replace(/&nbsp;/g, ' ')
+    .trim();
 }
 
 export function cleanSongTitle(title: string | null | undefined): string {

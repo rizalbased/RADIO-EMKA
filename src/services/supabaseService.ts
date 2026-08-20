@@ -25,6 +25,40 @@ export function getLastAdminQueueError() {
   return lastAdminQueueError;
 }
 
+/**
+ * Helper to execute Supabase database operations with automatic recovery
+ * for clock skew / future JWT errors (PGRST303: "JWT issued at future").
+ */
+async function executeWithJwtRetry<T = any>(
+  operation: () => PromiseLike<{ data?: T | null; error?: any }>
+): Promise<{ data?: T | null; error?: any }> {
+  let result = await operation();
+  const err = result.error;
+
+  if (
+    err &&
+    (err.code === 'PGRST303' ||
+     (typeof err.message === 'string' &&
+      (err.message.includes('JWT issued at future') ||
+       err.message.includes('invalid JWT') ||
+       err.message.includes('JWT expired'))))
+  ) {
+    console.warn('[SUPABASE JWT RECOVERY] Detected PGRST303 (JWT issued at future). Clearing invalid session token and retrying query...');
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.auth.signOut();
+      } catch (signOutErr) {
+        console.warn('[SUPABASE JWT RECOVERY] signOut warning:', signOutErr);
+      }
+    }
+    // Retry query after clearing invalid session token
+    result = await operation();
+  }
+
+  return result;
+}
+
 export async function fetchSongRequestsFromDb(): Promise<{
   requests: SongRequest[];
   isSupabase: boolean;
@@ -51,11 +85,13 @@ export async function fetchSongRequestsFromDb(): Promise<{
     console.log('[ADMIN QUEUE] fetching requests...');
 
     // 2. Fetch song_requests ordered by created_at ascending (FIFO) with id tie-breaker
-    const { data, error } = await client
-      .from('song_requests')
-      .select('*')
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true });
+    const { data, error } = await executeWithJwtRetry<DbSongRequest[]>(async () =>
+      await client
+        .from('song_requests')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+    );
 
     console.log('[EMKA ADMIN FETCH]', data, error);
 
@@ -93,11 +129,13 @@ export async function fetchRadioStateFromDb(): Promise<{
   }
 
   try {
-    const { data, error } = await client
-      .from('radio_state')
-      .select('*')
-      .eq('id', 1)
-      .maybeSingle();
+    const { data, error } = await executeWithJwtRetry<DbRadioState>(async () =>
+      await client
+        .from('radio_state')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle()
+    );
 
     if (error) {
       console.warn('[RADIO STATE] fetch error:', error);
@@ -130,11 +168,13 @@ export async function updateRadioStateInDb(
       updated_at: nowIso
     };
 
-    const { data, error } = await client
-      .from('radio_state')
-      .upsert(payload, { onConflict: 'id' })
-      .select()
-      .maybeSingle();
+    const { data, error } = await executeWithJwtRetry<DbRadioState>(async () =>
+      await client
+        .from('radio_state')
+        .upsert(payload, { onConflict: 'id' })
+        .select()
+        .maybeSingle()
+    );
 
     if (error) {
       console.warn('[RADIO STATE] update error:', error.message);
@@ -327,13 +367,15 @@ export async function advanceToNextSongRequest(currentRequestId?: string | null)
       .eq('status', 'playing');
 
     // 2. Fetch next pending request directly from Supabase (Strict FIFO: created_at ASC, id ASC)
-    const { data: nextRows, error: nextErr } = await client
-      .from('song_requests')
-      .select('*')
-      .in('status', ['pending', 'queued'])
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .limit(1);
+    const { data: nextRows, error: nextErr } = await executeWithJwtRetry<DbSongRequest[]>(async () =>
+      await client
+        .from('song_requests')
+        .select('*')
+        .in('status', ['pending', 'queued'])
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(1)
+    );
 
     if (nextErr) {
       console.warn('[ADVANCE FIFO] Query next request warning:', nextErr.message);
@@ -441,16 +483,16 @@ export function subscribeToSongRequests(callbacks: {
       },
       async (payload) => {
         if (payload.eventType === 'INSERT' && payload.new) {
-          console.log('[REALTIME] SONG REQUEST INSERT', payload.new);
+          console.log('[REALTIME REQUEST] SONG REQUEST INSERT', payload.new);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
         } else if (payload.eventType === 'UPDATE' && payload.new) {
-          console.log('[REALTIME] SONG REQUEST UPDATE', payload.new);
+          console.log('[REALTIME REQUEST] SONG REQUEST UPDATE', payload.new);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
         } else if (payload.eventType === 'DELETE') {
           const deletedId = (payload.old as any)?.id;
-          console.log(`[REQUEST REALTIME DELETE]\nrequestId=${deletedId}`);
+          console.log(`[REALTIME REQUEST] SONG REQUEST DELETE id=${deletedId}`);
           if (deletedId) {
             callbacks.onDelete?.(deletedId);
           }
@@ -459,22 +501,22 @@ export function subscribeToSongRequests(callbacks: {
         // Always sync queue directly with Supabase to ensure absolute consistency
         try {
           const { requests } = await fetchSongRequestsFromDb();
-          console.log('[REALTIME] QUEUE SYNC count =', requests?.length);
+          console.log('[REALTIME REQUEST] QUEUE SYNC count =', requests?.length);
           callbacks.onSyncAll?.(requests);
         } catch (e) {
-          console.error('[REALTIME] Error refreshing queue after event:', e);
+          console.error('[REALTIME REQUEST] Error refreshing queue after event:', e);
         }
       }
     )
     .subscribe((status, err) => {
-      console.log('[REALTIME SONG REQUESTS STATUS]', status);
+      console.log('[REALTIME REQUEST] Status:', status);
       if (status === 'SUBSCRIBED') {
         fetchSongRequestsFromDb().then(({ requests }) => {
           callbacks.onSyncAll?.(requests);
         });
       }
       if (err) {
-        console.error('[REALTIME SONG REQUESTS ERROR]', err);
+        console.error('[REALTIME REQUEST] Error:', err);
       }
     });
 
@@ -489,27 +531,26 @@ export function subscribeToSongRequests(callbacks: {
         table: 'radio_state'
       },
       (payload) => {
-        console.log('[RADIO STATE REALTIME]\n', payload.new);
+        console.log('[RADIO STATE] Realtime update:', payload.new);
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
-          console.log('[RADIO STATE STATUS]', rawNew.status);
-          console.log('[RADIO STATE CURRENT]', rawNew.current_request_id, rawNew.current_title);
+          console.log('[RADIO STATE] Status:', rawNew.status, 'Title:', rawNew.current_title);
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
     )
     .subscribe((status, err) => {
-      console.log('[REALTIME RADIO STATE STATUS]', status);
+      console.log('[RADIO STATE] Subscription status:', status);
       if (status === 'SUBSCRIBED') {
         fetchRadioStateFromDb().then(({ state }) => {
           if (state) {
-            console.log('[RADIO STATE INITIAL]', state.status, state.current_title);
+            console.log('[RADIO STATE] Initial state:', state.status, state.current_title);
             callbacks.onRadioStateChange?.(state);
           }
         });
       }
       if (err) {
-        console.error('[REALTIME RADIO STATE ERROR]', err);
+        console.error('[RADIO STATE] Realtime error:', err);
       }
     });
 
@@ -631,7 +672,9 @@ export async function insertSongRequest(data: {
       }
     } catch {}
 
-    // 6. Direct INSERT into public.song_requests with exact database mapping matching existing columns
+    console.log('[REQUEST INSERT] Preparing payload for song request:', { title: normTitle, artist: normArtist, videoId: cleanVideoId });
+
+    // 6. Direct INSERT into public.song_requests with exact database mapping
     const insertPayload: any = {
       user_id: currentUser.id,
       video_id: cleanVideoId || null,
@@ -651,23 +694,51 @@ export async function insertSongRequest(data: {
       status: 'pending'
     };
 
-    const { data: inserted, error: insertErr } = await client
-      .from('song_requests')
-      .insert(insertPayload)
-      .select()
-      .single();
+    let inserted: any = null;
+    let insertErr: any = null;
 
-    if (insertErr) {
-      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: ${insertErr.code}\nmessage: ${insertErr.message}\ndetails: ${(insertErr as any).details || null}\nhint: ${(insertErr as any).hint || null}`);
+    // Retry loop stripping missing columns if Postgres table schema cache doesn't have optional columns (PGRST204)
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const res = await client
+        .from('song_requests')
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (!res.error) {
+        inserted = res.data;
+        insertErr = null;
+        break;
+      }
+
+      insertErr = res.error;
+      const code = insertErr.code;
+      const msg = insertErr.message || '';
 
       // Handle duplicate error from unique constraint/index
       if (
-        insertErr.code === '23505' ||
-        insertErr.message?.toLowerCase().includes('duplicate') ||
-        insertErr.message?.toLowerCase().includes('already exists')
+        code === '23505' ||
+        msg.toLowerCase().includes('duplicate') ||
+        msg.toLowerCase().includes('already exists')
       ) {
         return { success: false, error: 'Lagu tersebut sudah ada di antrean.' };
       }
+
+      // Handle missing column in schema cache (PGRST204)
+      if (code === 'PGRST204' || msg.includes('Could not find the') || msg.includes('column of')) {
+        const match = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column ['"]?([^'"]+)['"]?/i);
+        if (match && match[1] && insertPayload.hasOwnProperty(match[1])) {
+          console.warn(`[REQUEST INSERT] Schema missing column '${match[1]}'. Stripping column and retrying insert...`);
+          delete insertPayload[match[1]];
+          continue;
+        }
+      }
+
+      break;
+    }
+
+    if (insertErr) {
+      console.error(`[REQUEST INSERT ERROR]\ncode: ${insertErr.code}\nmessage: ${insertErr.message}\ndetails: ${(insertErr as any).details || null}\nhint: ${(insertErr as any).hint || null}`);
 
       return {
         success: false,
@@ -676,11 +747,11 @@ export async function insertSongRequest(data: {
     }
 
     if (!inserted || !inserted.id) {
-      console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: NO_ID\nmessage: Database did not return inserted record\ndetails: null\nhint: null`);
+      console.error(`[REQUEST INSERT ERROR]\ncode: NO_ID\nmessage: Database did not return inserted record\ndetails: null\nhint: null`);
       return { success: false, error: 'Request gagal dikirim ke server.' };
     }
 
-    console.log(`[EMKA REQUEST]\nINSERT SUCCESS\nid: ${inserted.id}`);
+    console.log(`[REQUEST INSERT SUCCESS] ID: ${inserted.id}`);
 
     // Step 5: Database Verification - Immediately SELECT back
     const { data: verified, error: verifyErr } = await client
@@ -695,6 +766,12 @@ export async function insertSongRequest(data: {
     }
 
     const mapped = mapDbRequestToSongRequest(verified as DbSongRequest);
+    // Preserve local fields if DB schema did not store them
+    if (!mapped.message && data.message) mapped.message = data.message;
+    if (!mapped.targetPerson && data.targetPerson) mapped.targetPerson = data.targetPerson;
+    if (!mapped.previewUrl && data.previewUrl) mapped.previewUrl = data.previewUrl;
+    if (!mapped.coverUrl && data.coverUrl) mapped.coverUrl = data.coverUrl;
+
     return { success: true, request: mapped };
   } catch (err: any) {
     console.error(`[EMKA REQUEST]\nINSERT ERROR\ncode: EXCEPTION\nmessage: ${err?.message || 'Unexpected exception during insert'}\ndetails: null\nhint: null`);
@@ -839,10 +916,12 @@ export async function deleteDbSongRequest(requestId: string): Promise<{ success:
     }
 
     // 2. Perform direct delete using primary key ID
-    const { error: directErr } = await client
-      .from('song_requests')
-      .delete()
-      .eq('id', requestId);
+    const { error: directErr } = await executeWithJwtRetry(async () =>
+      await client
+        .from('song_requests')
+        .delete()
+        .eq('id', requestId)
+    );
 
     if (directErr) {
       console.warn('[REQUEST DELETE] Direct delete error, trying RPC fallback:', directErr.message);
@@ -883,11 +962,13 @@ export async function clearAllDbSongRequests(): Promise<boolean> {
   }
 
   try {
-    const { data, error } = await client
-      .from('song_requests')
-      .delete()
-      .eq('status', 'pending')
-      .select();
+    const { data, error } = await executeWithJwtRetry<any[]>(async () =>
+      await client
+        .from('song_requests')
+        .delete()
+        .eq('status', 'pending')
+        .select()
+    );
 
     if (error) {
       console.error('[CLEAR QUEUE] Supabase DELETE failed:', error);

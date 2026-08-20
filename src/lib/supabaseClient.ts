@@ -118,7 +118,20 @@ export async function ensureAnonymousSession(): Promise<string | null> {
       // 2. Retrieve session and user status
       const { data: latestSessionData } = await client.auth.getSession();
       const sessionExists = Boolean(latestSessionData?.session);
-      const { data: userData } = await client.auth.getUser();
+      let { data: userData, error: userErr } = await client.auth.getUser();
+
+      if (userErr && (userErr.code === 'PGRST303' || userErr.message?.includes('JWT issued at future'))) {
+        console.warn('[EMKA AUTH] Detected PGRST303 clock skew on getUser. Clearing session...');
+        try {
+          await client.auth.signOut();
+          if (typeof client.auth.signInAnonymously === 'function') {
+            await client.auth.signInAnonymously();
+          }
+        } catch {}
+        const retryUser = await client.auth.getUser();
+        userData = retryUser.data;
+      }
+
       const userExists = Boolean(userData?.user);
       const isAnon = Boolean(userData?.user?.is_anonymous);
 

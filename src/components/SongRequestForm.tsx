@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Music, Send, Sparkles, Search, User, School, HeartHandshake, MessageSquare, AlertCircle, CheckCircle2, Disc, Play } from 'lucide-react';
 import { MoodTag, ItunesSearchResult } from '../types';
-import { analyzeVibeWithAi, searchItunesSongs } from '../services/api';
+import { analyzeVibeWithAi, searchItunesSongs, findYouTubeMatch } from '../services/api';
 import { SongPreviewCard } from './SongPreviewCard';
 import { decodeHtmlEntities } from '../lib/textUtils';
 
@@ -142,18 +142,37 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  const [isMatchingYt, setIsMatchingYt] = useState(false);
+
   const handleSelectTrack = (track: ItunesSearchResult) => {
     skipSearchRef.current = true;
-    setSongTitle(track.trackName);
-    setArtist(track.artistName);
-    setAlbum(track.collectionName || '');
+    const cleanT = decodeHtmlEntities(track.trackName);
+    const cleanA = decodeHtmlEntities(track.artistName);
+
+    setSongTitle(cleanT);
+    setArtist(cleanA);
+    setAlbum(track.collectionName ? decodeHtmlEntities(track.collectionName) : '');
     setCoverUrl(track.artworkUrl600 || track.artworkUrl100);
     setPreviewUrl(track.previewUrl || '');
     setItunesTrackId(track.trackId);
     setItunesCollectionId(track.collectionId || '');
     setGenre(track.primaryGenreName || '');
-    setSearchQuery(`${track.trackName} - ${track.artistName}`);
+    setSearchQuery(`${cleanT} - ${cleanA}`);
     setShowSearchResults(false);
+    setYoutubeVideoId('');
+
+    // Fetch matching YouTube videoId in background
+    setIsMatchingYt(true);
+    findYouTubeMatch(cleanT, cleanA)
+      .then((vId) => {
+        setYoutubeVideoId(vId);
+      })
+      .catch((err) => {
+        console.warn('[YOUTUBE MATCH] Selection match notice:', err?.message || err);
+      })
+      .finally(() => {
+        setIsMatchingYt(false);
+      });
   };
 
   const handleAiVibeCheck = async () => {
@@ -195,6 +214,30 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       return;
     }
 
+    // Ensure valid YouTube videoId before inserting to database (Requirements 1, 15, 16)
+    let finalVideoId = youtubeVideoId ? youtubeVideoId.trim() : '';
+
+    if (!finalVideoId || finalVideoId.length !== 11) {
+      setIsMatchingYt(true);
+      try {
+        console.log(`[YOUTUBE MATCH] Resolving videoId on submit for "${songTitle} - ${artist}"`);
+        finalVideoId = await findYouTubeMatch(songTitle.trim(), artist.trim());
+        setYoutubeVideoId(finalVideoId);
+      } catch (err: any) {
+        setIsMatchingYt(false);
+        const errMsg = err?.message || `Gagal menemukan video YouTube yang cocok untuk "${songTitle} - ${artist}". Silakan coba lagu lain atau tempelkan link YouTube secara langsung.`;
+        setFormError(errMsg);
+        return; // STOP! Requirement 16: Jangan memasukkan request setengah jadi ke database
+      } finally {
+        setIsMatchingYt(false);
+      }
+    }
+
+    if (!finalVideoId || finalVideoId.length !== 11) {
+      setFormError('Video ID YouTube tidak valid. Silakan pilih lagu lain atau tempelkan link YouTube secara langsung.');
+      return;
+    }
+
     try {
       await onSubmitRequest({
         studentName: studentName.trim(),
@@ -204,13 +247,13 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
         targetPerson: targetPerson.trim() || 'Semua Teman',
         message: message.trim() || 'Salam hangat untuk semuanya!',
         mood,
-        coverUrl: coverUrl || (youtubeVideoId ? `https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'),
+        coverUrl: coverUrl || (finalVideoId ? `https://i.ytimg.com/vi/${finalVideoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'),
         previewUrl,
         album,
         genre,
         itunesTrackId,
         itunesCollectionId,
-        youtubeVideoId
+        youtubeVideoId: finalVideoId
       });
 
       setSuccessMessage('🎉 Request lagu berhasil dikirim.');
@@ -521,11 +564,11 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isMatchingYt}
             className="w-full py-4 rounded-2xl bg-[#0B0B0B] dark:bg-neon hover:bg-slate-800 dark:hover:bg-[#a6eb00] text-[#B8FF00] dark:text-black font-black text-sm shadow-pop-dark transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.99] border-2 border-black"
           >
             <Send className="w-4 h-4 text-neon dark:text-black" />
-            <span>{isSubmitting ? 'Mengirim Request...' : 'Kirim Request 🚀'}</span>
+            <span>{isSubmitting ? 'Mengirim Request...' : (isMatchingYt ? 'Mencari Video YouTube...' : 'Kirim Request 🚀')}</span>
           </button>
         </form>
       </div>

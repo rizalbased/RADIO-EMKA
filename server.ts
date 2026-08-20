@@ -1166,29 +1166,86 @@ async function searchServerFallback(query: string): Promise<{ videoId: string | 
   return { videoId: null, items: [] };
 }
 
+function serverDecodeHtmlEntities(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&nbsp;/g, ' ');
+}
+
+function serverNormalizeText(text: string): string {
+  return serverDecodeHtmlEntities(text || '')
+    .replace(/[^\w\s'’]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreYouTubeCandidate(item: any, cleanTitle: string, cleanArtist: string): number {
+  if (!item) return 0;
+  const rawId = item.videoId || item.id?.videoId || (typeof item.id === 'string' ? item.id : null);
+  if (!rawId || typeof rawId !== 'string' || rawId.trim().length !== 11) return 0;
+
+  const videoTitle = serverDecodeHtmlEntities(item.title || item.snippet?.title || '').toLowerCase();
+  const channelTitle = serverDecodeHtmlEntities(item.channelTitle || item.snippet?.channelTitle || '').toLowerCase();
+  const lowerTitle = cleanTitle.toLowerCase();
+  const lowerArtist = cleanArtist.toLowerCase();
+
+  let score = 10;
+  if (lowerTitle && videoTitle.includes(lowerTitle)) score += 40;
+  if (lowerArtist && (videoTitle.includes(lowerArtist) || channelTitle.includes(lowerArtist))) score += 30;
+  if (videoTitle.includes('official music video') || videoTitle.includes('official video') || videoTitle.includes('official audio') || videoTitle.includes('official lyric video') || videoTitle.includes('mv')) score += 15;
+  if (channelTitle.includes('topic') || channelTitle.includes('official')) score += 15;
+  if ((!lowerTitle.includes('cover') && videoTitle.includes('cover')) || (!lowerTitle.includes('karaoke') && videoTitle.includes('karaoke')) || (!lowerTitle.includes('reaction') && videoTitle.includes('reaction'))) score -= 25;
+
+  return score;
+}
+
 // Official YouTube Data API v3 Video Search
-async function searchYouTubeOfficial(query: string): Promise<{ videoId: string | null; items: any[] }> {
+async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawArtist: string = ''): Promise<{ videoId: string | null; items: any[]; success: boolean; error?: string; message?: string }> {
   const apiKey = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
+  const cleanT = serverNormalizeText(rawTitle);
+  const cleanA = serverNormalizeText(rawArtist);
+  const cleanQ = `${cleanT} ${cleanA}`.replace(/\s+/g, ' ').trim() || serverNormalizeText(query);
 
   if (apiKey) {
     try {
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoEmbeddable=true&maxResults=6&key=${apiKey}`;
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(cleanQ)}&type=video&videoEmbeddable=true&maxResults=6&key=${apiKey}`;
       const res = await fetch(url);
       if (res.ok) {
         const data: any = await res.json();
-        const items = (data.items || []).map((item: any) => ({
+        const rawItems = (data.items || []).map((item: any) => ({
           videoId: item.id?.videoId || '',
-          title: item.snippet?.title || '',
-          artist: item.snippet?.channelTitle || '',
-          channelTitle: item.snippet?.channelTitle || '',
-          thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || ''
-        })).filter((i: any) => i.videoId);
+          title: serverDecodeHtmlEntities(item.snippet?.title || ''),
+          artist: serverDecodeHtmlEntities(item.snippet?.channelTitle || ''),
+          channelTitle: serverDecodeHtmlEntities(item.snippet?.channelTitle || ''),
+          thumbnail: item.snippet?.thumbnails?.high?.url || item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || ''
+        })).filter((i: any) => i.videoId && i.videoId.length === 11);
 
-        const primaryVideoId = items[0]?.videoId || null;
-        return { videoId: primaryVideoId, items };
+        if (rawItems.length > 0) {
+          const scored = rawItems.map((item: any) => ({
+            item,
+            score: scoreYouTubeCandidate(item, cleanT, cleanA)
+          })).sort((a: any, b: any) => b.score - a.score);
+
+          const best = scored[0];
+          if (best && best.score >= 15) {
+            return { success: true, videoId: best.item.videoId, items: scored.map(s => s.item) };
+          }
+        }
+        return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Tidak ditemukan video YouTube yang relevan untuk "${cleanQ}".` };
       } else {
+        const status = res.status;
         const errText = await res.text();
-        console.warn('[YouTube Data API v3] Status:', res.status, errText.slice(0, 200));
+        console.warn('[YouTube Data API v3] Status:', status, errText.slice(0, 200));
+        if (status === 403 || status === 429 || errText.includes('quotaExceeded')) {
+          return { success: false, videoId: null, items: [], error: 'YOUTUBE_QUOTA_EXCEEDED', message: 'Kuota YouTube API sedang habis.' };
+        }
       }
     } catch (err: any) {
       console.error('[YouTube Data API v3] Search request failed:', err.message);
@@ -1198,24 +1255,36 @@ async function searchYouTubeOfficial(query: string): Promise<{ videoId: string |
   }
 
   // Fallback if 429 quota reached or no key configured
-  return await searchServerFallback(query);
+  const fallback = await searchServerFallback(cleanQ);
+  if (fallback.items && fallback.items.length > 0) {
+    return { success: true, videoId: fallback.items[0].videoId || null, items: fallback.items };
+  }
+  return { success: false, videoId: null, items: [], error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Gagal menemukan video YouTube untuk "${cleanQ}".` };
 }
 
-// YouTube Search Proxy Endpoint (Strictly server-side official YouTube Data API v3)
-app.get('/api/youtube/search', async (req, res) => {
-  const query = req.query.q as string;
+// YouTube Match Function Handler (Supports both Edge Function path & API path)
+const handleYoutubeMatchRequest = async (req: express.Request, res: express.Response) => {
+  const title = (req.body?.title || req.body?.trackName || req.query?.title || req.query?.trackName || req.query?.q || '') as string;
+  const artist = (req.body?.artist || req.body?.artistName || req.query?.artist || req.query?.artistName || '') as string;
+  const query = (req.query.q as string) || `${title} ${artist}`;
+
   if (!query || query.trim().length === 0) {
-    return res.json({ videoId: null, items: [] });
+    return res.json({ success: false, videoId: null, items: [], error: 'QUERY_EMPTY' });
   }
 
   try {
-    const result = await searchYouTubeOfficial(query);
+    const result = await searchYouTubeOfficial(query, title, artist);
     res.json(result);
   } catch (err: any) {
-    console.error('API /api/youtube/search error:', err.message);
-    res.json({ videoId: null, items: [] });
+    console.error('API youtube match error:', err.message);
+    res.json({ success: false, videoId: null, items: [], error: 'INTERNAL_ERROR' });
   }
-});
+};
+
+app.get('/functions/v1/youtube-match', handleYoutubeMatchRequest);
+app.post('/functions/v1/youtube-match', handleYoutubeMatchRequest);
+app.get('/api/youtube/search', handleYoutubeMatchRequest);
+app.post('/api/youtube/search', handleYoutubeMatchRequest);
 
 // 7c. Live Radio State sync endpoints (Admin = write, User = read)
 app.get('/api/live-state', (req, res) => {

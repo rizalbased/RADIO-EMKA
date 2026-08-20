@@ -377,6 +377,7 @@ const itunesMemoryCache = new Map<string, ItunesCacheItem>();
 export async function searchItunesSongs(query: string): Promise<ItunesSearchResult[]> {
   if (!query || !query.trim()) return [];
   const rawQ = query.trim();
+  console.log('[ITUNES SEARCH] Term:', rawQ);
   const normKey = rawQ.toLowerCase();
   const now = Date.now();
 
@@ -386,6 +387,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
     if (memCached.errorMessage) {
       throw new Error(memCached.errorMessage);
     }
+    console.log('[ITUNES RESULT] Returning memory cache count:', memCached.items.length);
     return memCached.items;
   }
 
@@ -399,6 +401,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
           throw new Error(parsed.errorMessage);
         }
         itunesMemoryCache.set(normKey, parsed);
+        console.log('[ITUNES RESULT] Returning localStorage cache count:', parsed.items.length);
         return parsed.items;
       }
     }
@@ -418,7 +421,8 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
       artworkUrl100: rawArtwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
       artworkUrl600: artwork600 || rawArtwork,
       previewUrl: item.previewUrl || undefined,
-      primaryGenreName: item.primaryGenreName || undefined
+      primaryGenreName: item.primaryGenreName || undefined,
+      releaseDate: item.releaseDate || undefined
     };
   };
 
@@ -430,6 +434,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
       const data = await res.json();
       if (data.results && Array.isArray(data.results)) {
         const results = data.results.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
+        console.log('[ITUNES RESULT] Direct fetch count:', results.length);
         if (results.length > 0) {
           const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
           itunesMemoryCache.set(normKey, cacheEntry);
@@ -457,6 +462,7 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
       const rawResults = proxyData.results || proxyData.items || [];
       if (Array.isArray(rawResults) && rawResults.length > 0) {
         const results = rawResults.map(normalizeItunesResult).filter(Boolean) as ItunesSearchResult[];
+        console.log('[ITUNES SEARCH] Proxy fetch count:', results.length);
         if (results.length > 0) {
           const cacheEntry: ItunesCacheItem = { timestamp: now, items: results };
           itunesMemoryCache.set(normKey, cacheEntry);
@@ -471,6 +477,88 @@ export async function searchItunesSongs(query: string): Promise<ItunesSearchResu
 
   const errorMsg = 'Pencarian lagu sedang mengalami gangguan.';
   throw new Error(errorMsg);
+}
+
+export function normalizeSongQuery(title: string, artist: string): { cleanTitle: string; cleanArtist: string; searchQuery: string } {
+  let cleanTitle = decodeHtmlEntities(title || '')
+    .replace(/[^\w\s'’]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  let cleanArtist = decodeHtmlEntities(artist || '')
+    .replace(/[^\w\s'’]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanTitle) cleanTitle = decodeHtmlEntities(title || '').trim();
+  if (!cleanArtist) cleanArtist = decodeHtmlEntities(artist || '').trim();
+
+  const searchQuery = `${cleanTitle} ${cleanArtist}`.replace(/\s+/g, ' ').trim();
+  return { cleanTitle, cleanArtist, searchQuery };
+}
+
+/**
+ * Searches YouTube for a matching video based on song title and artist.
+ * Returns a valid 11-character YouTube videoId.
+ */
+export async function findYouTubeMatch(title: string, artist: string): Promise<string> {
+  const { cleanTitle, cleanArtist, searchQuery } = normalizeSongQuery(title, artist);
+
+  console.log(`[YOUTUBE MATCH] Finding YouTube video for: "${searchQuery}"`);
+
+  if (!searchQuery) {
+    throw new Error('Judul dan artis lagu harus diisi.');
+  }
+
+  // 1. Try Supabase Edge Function / Node endpoint /functions/v1/youtube-match first
+  try {
+    const edgeRes = await fetch('/functions/v1/youtube-match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: cleanTitle, artist: cleanArtist, trackName: cleanTitle, artistName: cleanArtist })
+    });
+
+    if (edgeRes.ok) {
+      const edgeData = await edgeRes.json();
+      if (edgeData.success && edgeData.videoId && typeof edgeData.videoId === 'string' && edgeData.videoId.trim().length === 11) {
+        const vid = edgeData.videoId.trim();
+        console.log(`[YOUTUBE MATCH] Success via Edge Function! Found videoId: ${vid} for "${searchQuery}"`);
+        return vid;
+      } else if (edgeData.error === 'YOUTUBE_QUOTA_EXCEEDED') {
+        console.warn(`[YOUTUBE QUOTA] Quota exceeded on server for "${searchQuery}"`);
+        throw new Error(edgeData.message || 'Kuota YouTube API sedang habis. Silakan tempelkan link YouTube langsung.');
+      } else if (edgeData.error === 'YOUTUBE_MATCH_NOT_FOUND') {
+        console.warn(`[YOUTUBE MATCH] Not found via Edge Function for "${searchQuery}"`);
+        throw new Error(`Gagal menemukan video YouTube yang cocok untuk "${cleanTitle} - ${cleanArtist}". Silakan coba lagu lain atau tempelkan link YouTube.`);
+      }
+    }
+  } catch (err: any) {
+    if (err?.message && (err.message.includes('Kuota') || err.message.includes('Gagal menemukan'))) {
+      throw err;
+    }
+    console.log('[YOUTUBE MATCH] Edge Function notice:', err?.message || err);
+  }
+
+  // 2. Fallback to searchYouTubeVideos
+  try {
+    const results = await searchYouTubeVideos(searchQuery);
+    if (results && results.length > 0) {
+      const validMatch = results.find(r => typeof r.videoId === 'string' && r.videoId.trim().length === 11);
+      if (validMatch && validMatch.videoId) {
+        const matchedId = validMatch.videoId.trim();
+        console.log(`[YOUTUBE MATCH] Success via Fallback! Found videoId: ${matchedId} for "${searchQuery}"`);
+        return matchedId;
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[YOUTUBE MATCH] Search fallback failed for "${searchQuery}":`, err?.message || err);
+    if (err?.message && err.message.includes('Kuota')) {
+      throw err;
+    }
+  }
+
+  console.error(`[YOUTUBE MATCH] Failed to find YouTube videoId for: "${searchQuery}"`);
+  throw new Error(`Gagal menemukan video YouTube yang cocok untuk "${cleanTitle} - ${cleanArtist}". Silakan coba lagu lain atau tempelkan link YouTube.`);
 }
 
 // Search cache store (In-memory + localStorage backup)

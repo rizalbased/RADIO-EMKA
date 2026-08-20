@@ -115,6 +115,7 @@ export interface ItunesSearchResult {
   artworkUrl600?: string;
   previewUrl?: string;
   primaryGenreName?: string;
+  releaseDate?: string;
 }
 
 export interface AiVibeAnalysis {
