@@ -358,6 +358,128 @@ export async function updateRequestYoutubeVideoId(requestId: string, youtubeVide
   return { success: true, requests: current };
 }
 
+async function searchFallbackPublicEngines(cleanQ: string): Promise<YouTubeSearchResult[]> {
+  console.log(`[YOUTUBE SEARCH FALLBACK] Querying public engines for "${cleanQ}"...`);
+
+  // 1. Try Piped API public instances
+  const pipedInstances = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.yt',
+    'https://pipedapi.privacy.com.de'
+  ];
+
+  for (const baseUrl of pipedInstances) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`${baseUrl}/search?q=${encodeURIComponent(cleanQ)}&filter=videos`, { signal: controller.signal });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length > 0) {
+          const mapped: YouTubeSearchResult[] = items
+            .map((item: any) => {
+              const url = item.url || '';
+              const match = url.match(/v=([a-zA-Z0-9_-]{11})/);
+              const videoId = match ? match[1] : (item.id || '');
+              if (!videoId || videoId.length !== 11) return null;
+
+              return {
+                videoId,
+                title: decodeHtmlEntities(item.title || ''),
+                channelTitle: decodeHtmlEntities(item.uploaderName || item.artist || ''),
+                thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+              };
+            })
+            .filter(Boolean) as YouTubeSearchResult[];
+
+          if (mapped.length > 0) {
+            console.log(`[YOUTUBE SEARCH FALLBACK] Piped API (${baseUrl}) returned ${mapped.length} items`);
+            return mapped;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Try Invidious API public instances
+  const invidiousInstances = [
+    'https://inv.tux.pizza',
+    'https://invidious.drgns.space',
+    'https://vid.puffyan.us'
+  ];
+
+  for (const baseUrl of invidiousInstances) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`${baseUrl}/api/v1/search?q=${encodeURIComponent(cleanQ)}&type=video`, { signal: controller.signal });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped: YouTubeSearchResult[] = data
+            .map((item: any) => {
+              const videoId = item.videoId || '';
+              if (!videoId || videoId.length !== 11) return null;
+
+              return {
+                videoId,
+                title: decodeHtmlEntities(item.title || ''),
+                channelTitle: decodeHtmlEntities(item.author || item.uploaderName || ''),
+                thumbnail: item.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+              };
+            })
+            .filter(Boolean) as YouTubeSearchResult[];
+
+          if (mapped.length > 0) {
+            console.log(`[YOUTUBE SEARCH FALLBACK] Invidious API (${baseUrl}) returned ${mapped.length} items`);
+            return mapped;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. iTunes Search API Fallback
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=song&limit=8`, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.results) && data.results.length > 0) {
+        const mapped: YouTubeSearchResult[] = data.results
+          .map((item: any) => {
+            const songName = item.trackName || '';
+            const artistName = item.artistName || '';
+            if (!songName) return null;
+
+            return {
+              videoId: '',
+              title: decodeHtmlEntities(songName),
+              channelTitle: decodeHtmlEntities(artistName),
+              thumbnail: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '600x600bb') : ''
+            };
+          })
+          .filter(Boolean) as YouTubeSearchResult[];
+
+        if (mapped.length > 0) {
+          console.log(`[YOUTUBE SEARCH FALLBACK] iTunes API returned ${mapped.length} songs`);
+          return mapped;
+        }
+      }
+    }
+  } catch {}
+
+  return [];
+}
+
 export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchResult[]> {
   if (!query || !query.trim()) return [];
   const cleanQ = query.trim();
@@ -407,39 +529,42 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeSearchR
     console.log('[YOUTUBE SEARCH] Proxy fetch notice (normal for static deployments):', err?.message || err);
   }
 
-  // 2. Direct client call to Google YouTube Data API v3 (works on static hosting like GitHub Pages)
+  // 2. Direct client call to Google YouTube Data API v3
   const apiKey =
     (import.meta as any).env?.VITE_YOUTUBE_API_KEY ||
     (import.meta as any).env?.YOUTUBE_API_KEY ||
     (typeof process !== 'undefined' ? (process.env?.VITE_YOUTUBE_API_KEY || process.env?.YOUTUBE_API_KEY) : '');
 
-  if (!apiKey) {
-    console.warn('[YOUTUBE SEARCH] Neither proxy returned results nor VITE_YOUTUBE_API_KEY is configured.');
-    return [];
+  if (apiKey) {
+    try {
+      const directUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
+      const directRes = await fetch(directUrl);
+
+      if (directRes.ok) {
+        const data = await directRes.json();
+        if (data.items && Array.isArray(data.items)) {
+          const results = data.items.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
+          if (results.length > 0) {
+            console.log(`[YOUTUBE SEARCH] direct results=${results.length}`);
+            return results;
+          }
+        }
+      } else {
+        const status = directRes.status;
+        const errText = await directRes.text();
+        if (status === 429 || status === 403 || errText.includes('quotaExceeded') || errText.includes('RESOURCE_EXHAUSTED')) {
+          console.warn(`[YOUTUBE SEARCH] YouTube Data API Quota Exceeded (status ${status}). Activating fallback public search engines...`);
+        } else {
+          console.warn(`[YOUTUBE SEARCH] Direct API error status ${status}:`, errText);
+        }
+      }
+    } catch (err: any) {
+      console.warn('[YOUTUBE SEARCH] Direct search exception:', err?.message || err);
+    }
   }
 
-  try {
-    const directUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=10&q=${encodeURIComponent(cleanQ)}&key=${apiKey}`;
-    const directRes = await fetch(directUrl);
-    console.log(`[YOUTUBE SEARCH] direct status=${directRes.status}`);
-
-    if (!directRes.ok) {
-      const errText = await directRes.text();
-      console.error(`[YOUTUBE SEARCH ERROR] status=${directRes.status} message=${errText}`);
-      return [];
-    }
-
-    const data = await directRes.json();
-    if (data.items && Array.isArray(data.items)) {
-      const results = data.items.map(normalizeItem).filter(Boolean) as YouTubeSearchResult[];
-      console.log(`[YOUTUBE SEARCH] direct results=${results.length}`);
-      return results;
-    }
-  } catch (err: any) {
-    console.error('[YOUTUBE SEARCH ERROR] Direct search exception:', err?.message || err);
-  }
-
-  return [];
+  // 3. Fallback search engine (Piped / Invidious / iTunes)
+  return await searchFallbackPublicEngines(cleanQ);
 }
 
 export async function likeRequest(requestId: string): Promise<{ success: boolean; likes: number }> {

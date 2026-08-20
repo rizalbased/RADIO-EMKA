@@ -1080,38 +1080,125 @@ Berikan respon JSON murni tanpa markdown formatting dalam bahasa Indonesia gaul/
   }
 });
 
+// Fallback engine for server side if YouTube Data API quota is exceeded
+async function searchServerFallback(query: string): Promise<{ videoId: string | null; items: any[] }> {
+  const cleanQ = query.trim();
+
+  // Try Piped instances
+  const pipedInstances = ['https://pipedapi.kavin.rocks', 'https://api.piped.yt', 'https://pipedapi.privacy.com.de'];
+  for (const baseUrl of pipedInstances) {
+    try {
+      const res = await fetch(`${baseUrl}/search?q=${encodeURIComponent(cleanQ)}&filter=videos`);
+      if (res.ok) {
+        const data: any = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length > 0) {
+          const mapped = items.map((i: any) => {
+            const match = (i.url || '').match(/v=([a-zA-Z0-9_-]{11})/);
+            const videoId = match ? match[1] : (i.id || '');
+            if (!videoId || videoId.length !== 11) return null;
+            return {
+              videoId,
+              title: i.title || '',
+              artist: i.uploaderName || '',
+              channelTitle: i.uploaderName || '',
+              thumbnail: i.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+            };
+          }).filter(Boolean);
+
+          if (mapped.length > 0) {
+            return { videoId: mapped[0].videoId, items: mapped };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Try Invidious instances
+  const invInstances = ['https://inv.tux.pizza', 'https://invidious.drgns.space', 'https://vid.puffyan.us'];
+  for (const baseUrl of invInstances) {
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/search?q=${encodeURIComponent(cleanQ)}&type=video`);
+      if (res.ok) {
+        const data: any = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped = data.map((i: any) => {
+            const videoId = i.videoId || '';
+            if (!videoId || videoId.length !== 11) return null;
+            return {
+              videoId,
+              title: i.title || '',
+              artist: i.author || i.uploaderName || '',
+              channelTitle: i.author || i.uploaderName || '',
+              thumbnail: i.videoThumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+            };
+          }).filter(Boolean);
+
+          if (mapped.length > 0) {
+            return { videoId: mapped[0].videoId, items: mapped };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // iTunes Fallback
+  try {
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanQ)}&entity=song&limit=8`);
+    if (res.ok) {
+      const data: any = await res.json();
+      if (Array.isArray(data.results) && data.results.length > 0) {
+        const mapped = data.results.map((i: any) => ({
+          videoId: '',
+          title: i.trackName || '',
+          artist: i.artistName || '',
+          channelTitle: i.artistName || '',
+          thumbnail: i.artworkUrl100 ? i.artworkUrl100.replace('100x100bb', '600x600bb') : ''
+        })).filter((i: any) => i.title);
+
+        if (mapped.length > 0) {
+          return { videoId: null, items: mapped };
+        }
+      }
+    }
+  } catch {}
+
+  return { videoId: null, items: [] };
+}
+
 // Official YouTube Data API v3 Video Search
 async function searchYouTubeOfficial(query: string): Promise<{ videoId: string | null; items: any[] }> {
   const apiKey = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
-  if (!apiKey) {
-    console.log('[YouTube Data API v3] API key not configured on server');
-    return { videoId: null, items: [] };
-  }
 
-  try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoEmbeddable=true&maxResults=6&key=${apiKey}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data: any = await res.json();
-      const items = (data.items || []).map((item: any) => ({
-        videoId: item.id?.videoId || '',
-        title: item.snippet?.title || '',
-        artist: item.snippet?.channelTitle || '',
-        channelTitle: item.snippet?.channelTitle || '',
-        thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || ''
-      })).filter((i: any) => i.videoId);
+  if (apiKey) {
+    try {
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoEmbeddable=true&maxResults=6&key=${apiKey}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data: any = await res.json();
+        const items = (data.items || []).map((item: any) => ({
+          videoId: item.id?.videoId || '',
+          title: item.snippet?.title || '',
+          artist: item.snippet?.channelTitle || '',
+          channelTitle: item.snippet?.channelTitle || '',
+          thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || ''
+        })).filter((i: any) => i.videoId);
 
-      const primaryVideoId = items[0]?.videoId || null;
-      return { videoId: primaryVideoId, items };
-    } else {
-      const errText = await res.text();
-      console.warn('[YouTube Data API v3] Error response:', res.status, errText);
+        const primaryVideoId = items[0]?.videoId || null;
+        return { videoId: primaryVideoId, items };
+      } else {
+        const errText = await res.text();
+        console.warn('[YouTube Data API v3] Status:', res.status, errText.slice(0, 200));
+      }
+    } catch (err: any) {
+      console.error('[YouTube Data API v3] Search request failed:', err.message);
     }
-  } catch (err: any) {
-    console.error('[YouTube Data API v3] Search request failed:', err.message);
+  } else {
+    console.log('[YouTube Data API v3] API key not configured on server');
   }
 
-  return { videoId: null, items: [] };
+  // Fallback if 429 quota reached or no key configured
+  return await searchServerFallback(query);
 }
 
 // YouTube Search Proxy Endpoint (Strictly server-side official YouTube Data API v3)

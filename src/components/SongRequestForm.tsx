@@ -3,6 +3,7 @@ import { Music, Send, Sparkles, Search, User, School, HeartHandshake, MessageSqu
 import { MoodTag, YouTubeSearchResult } from '../types';
 import { analyzeVibeWithAi, searchYouTubeVideos } from '../services/api';
 import { SongPreviewCard } from './SongPreviewCard';
+import { decodeHtmlEntities } from '../lib/textUtils';
 
 interface SongRequestFormProps {
   onSubmitRequest: (data: {
@@ -61,14 +62,18 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
   const [formError, setFormError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Helper to extract YouTube Video ID if user enters a YouTube URL
-  const extractYouTubeId = (url: string): string | null => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
+  // Helper to extract YouTube Video ID if user enters a YouTube URL or Video ID
+  const extractYouTubeId = (input: string): string | null => {
+    const trimmed = input.trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+    const match = trimmed.match(regExp);
+    return match && match[1] ? match[1] : null;
   };
 
-  // Debounced YouTube music search via YouTube Data API v3
+  // Debounced YouTube music search via YouTube Data API v3 & Fallback Engines
   useEffect(() => {
     if (!searchQuery || searchQuery.trim().length < 2) {
       setSearchResults([]);
@@ -77,13 +82,22 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
       return;
     }
 
-    // Check if user pasted a direct YouTube URL
+    // Check if user pasted a direct YouTube URL or 11-char Video ID
     const extractedId = extractYouTubeId(searchQuery.trim());
     if (extractedId) {
       setYoutubeVideoId(extractedId);
       setCoverUrl(`https://i.ytimg.com/vi/${extractedId}/hqdefault.jpg`);
       setShowSearchResults(false);
       setSearchError('');
+
+      // Auto-fetch video metadata via YouTube oEmbed (no API key / quota required!)
+      fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${extractedId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.title) setSongTitle(decodeHtmlEntities(data.title));
+          if (data.author_name) setArtist(decodeHtmlEntities(data.author_name));
+        })
+        .catch(() => {});
       return;
     }
 
@@ -98,12 +112,12 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
           setSearchError('');
         } else {
           setShowSearchResults(false);
-          setSearchError('Gagal mencari lagu atau hasil tidak ditemukan. Silakan coba kata kunci lain.');
+          setSearchError('Gagal mencari lagu atau hasil tidak ditemukan. Kamu dapat menempelkan (paste) Link YouTube lagu secara langsung.');
         }
       } catch (err: any) {
         console.warn('[YOUTUBE SEARCH ERROR]:', err);
         setShowSearchResults(false);
-        setSearchError('Gagal mencari lagu. Silakan coba lagi.');
+        setSearchError('Gagal mencari lagu. Silakan coba tempelkan Link YouTube secara langsung.');
       } finally {
         setIsSearching(false);
       }
