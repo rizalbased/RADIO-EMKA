@@ -36,7 +36,7 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   const isAdmin = userRole === 'admin';
   const adminQueueError = isAdmin ? getLastAdminQueueError() : null;
 
-  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
 
   const playingTrack = currentPlayingId
     ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {

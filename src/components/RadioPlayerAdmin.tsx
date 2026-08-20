@@ -57,7 +57,7 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
     radioState
   } = useRadioEngine();
 
-  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
 
   const playingTrack = currentPlayingId
     ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {

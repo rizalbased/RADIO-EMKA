@@ -387,7 +387,7 @@ export default function App() {
   };
 
   // Source of truth for currently playing track is radioState (id=1)
-  const currentPlayingId = (radioState && radioState.status === 'playing') ? radioState.current_request_id : null;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
   const currentlyPlayingTrack = currentPlayingId
     ? requests.find((r) => r.id === currentPlayingId) || (radioState?.current_title ? {
         id: currentPlayingId,

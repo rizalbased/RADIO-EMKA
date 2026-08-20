@@ -62,12 +62,14 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
     registerPlayerController,
     handlePlayerStateChange,
     handlePlayerError,
-    handleTrackEnded
+    handleTrackEnded,
+    radioState
   } = useRadioEngine();
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
-  const queuedRequests = requests.filter((r) => r.status === 'Queued');
-  const isPlaying = ytPlayerState === 1;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
+  const playingTrack = (currentPlayingId ? requests.find((r) => r.id === currentPlayingId) : null) || requests.find((r) => r.status === 'Playing' || r.status === 'playing');
+  const queuedRequests = requests.filter((r) => (r.status === 'Queued' || r.status === 'pending') && r.id !== currentPlayingId);
+  const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
   const isBuffering = ytPlayerState === 3;
   const isAdmin = userRole === 'admin';
 
@@ -76,9 +78,9 @@ export const RadioPlayerView: React.FC<RadioPlayerViewProps> = ({
   const [customYtInput, setCustomYtInput] = useState('');
 
   // Use active metadata from YouTube video data if available
-  const displayTitle = activeTrackMetadata?.title || playingTrack?.songTitle || 'EMKA Radio Standby';
-  const displayArtist = activeTrackMetadata?.channelTitle || playingTrack?.artist || 'Radiomu Multi Karya';
-  const displayCover = activeTrackMetadata?.thumbnail || (ytVideoId ? `https://img.youtube.com/vi/${ytVideoId}/hqdefault.jpg` : playingTrack?.coverUrl);
+  const displayTitle = activeTrackMetadata?.title || radioState?.current_title || playingTrack?.songTitle || 'EMKA Radio Standby';
+  const displayArtist = activeTrackMetadata?.channelTitle || radioState?.current_channel_title || playingTrack?.artist || 'Radiomu Multi Karya';
+  const displayCover = activeTrackMetadata?.thumbnail || radioState?.current_thumbnail_url || (ytVideoId ? `https://img.youtube.com/vi/${ytVideoId}/hqdefault.jpg` : playingTrack?.coverUrl);
 
   const currentFormatted = formatTime(ytCurrentTime);
   const totalFormatted = ytDuration > 0 ? formatTime(ytDuration) : '--:--';

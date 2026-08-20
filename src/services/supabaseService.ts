@@ -264,9 +264,14 @@ export async function setAdminPlaySong(req: {
 /**
  * Admin action: Pause radio.
  */
-export async function setAdminPauseRadio(): Promise<{ success: boolean; error?: string }> {
+export async function setAdminPauseRadio(currentTime?: number): Promise<{ success: boolean; error?: string }> {
+  console.log('[RADIO PAUSE]', currentTime !== undefined ? `at time ${currentTime}` : '');
   console.log('[RADIO STATE] paused');
-  return await updateRadioStateInDb({ status: 'paused' });
+  const patch: Partial<DbRadioState> = { status: 'paused' };
+  if (currentTime !== undefined && !isNaN(currentTime)) {
+    patch.current_time = currentTime;
+  }
+  return await updateRadioStateInDb(patch);
 }
 
 /**

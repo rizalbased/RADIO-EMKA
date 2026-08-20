@@ -144,6 +144,7 @@ export interface DbRadioState {
   current_channel_title?: string | null;
   current_thumbnail_url?: string | null;
   current_preview_url?: string | null;
+  current_time?: number | null;
   started_at?: string | null;
   updated_at?: string | null;
 }

@@ -326,22 +326,17 @@ export const RadioEngineProvider: React.FC<{
       }
     } else {
       // 2. Video is already loaded.
-      // Admin syncs play/pause from master state.
-      // USER LOCAL PLAYER is NOT overwritten by remote pause/play events.
-      if (!isUser) {
-        if (state.status === 'playing') {
-          if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
-            console.log('[REALTIME APPLY] Admin playing -> Resume playback');
-            playerControllerRef.current.play();
-          }
-        } else if (state.status === 'paused') {
-          if (playerControllerRef.current && ytPlayerStateRef.current === 1) {
-            console.log('[REALTIME APPLY] Admin paused -> Pause playback');
-            playerControllerRef.current.pause();
-          }
+      // Sync play/pause state across all clients
+      if (state.status === 'playing') {
+        if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
+          console.log('[REALTIME APPLY] Remote status playing -> Resume playback');
+          playerControllerRef.current.play();
         }
-      } else {
-        console.log('[REALTIME APPLY] User mode: Realtime radio info updated, local player state retained (localState:', ytPlayerStateRef.current, ')');
+      } else if (state.status === 'paused') {
+        if (playerControllerRef.current && ytPlayerStateRef.current === 1) {
+          console.log('[REALTIME APPLY] Remote status paused -> Pause playback');
+          playerControllerRef.current.pause();
+        }
       }
     }
 
@@ -645,8 +640,9 @@ export const RadioEngineProvider: React.FC<{
     if (userRoleRef.current === 'admin') {
       console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
       if (isPlaying) {
-        // 1. Update Supabase radio_state -> paused
-        await setAdminPauseRadio();
+        // 1. Update Supabase radio_state -> paused with currentTime
+        const curTime = controller ? controller.getCurrentTime() : ytCurrentTimeRef.current;
+        await setAdminPauseRadio(curTime);
         // 2. Pause YouTube Player
         if (controller) {
           controller.pause();
