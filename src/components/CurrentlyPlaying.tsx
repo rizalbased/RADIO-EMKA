@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Radio, Disc, Heart, Sparkles, MessageCircleHeart, Play, Pause, UserCheck, Mic, Image as ImageIcon, ListMusic, ArrowRight, User } from 'lucide-react';
 import { SongRequest, RadioHost } from '../types';
+import { decodeHtmlEntities } from '../lib/textUtils';
 
 interface CurrentlyPlayingProps {
   currentTrack?: SongRequest;
@@ -257,10 +258,10 @@ export const CurrentlyPlaying: React.FC<CurrentlyPlayingProps> = ({
                   {currentTrack.mood || '🎧 Vibe Check'}
                 </span>
                 <h2 className="text-2xl sm:text-3xl font-black text-primary tracking-tight mt-2 font-display uppercase">
-                  {currentTrack.songTitle}
+                  {decodeHtmlEntities(currentTrack.songTitle)}
                 </h2>
                 <p className="text-lg font-bold text-secondary">
-                  {currentTrack.artist}
+                  {decodeHtmlEntities(currentTrack.artist)}
                 </p>
               </div>
 
@@ -279,18 +280,18 @@ export const CurrentlyPlaying: React.FC<CurrentlyPlayingProps> = ({
                 <div className="flex flex-wrap items-center justify-between text-xs text-secondary gap-2 border-b border-subtle pb-2 font-bold">
                   <div>
                     <span className="text-secondary">Dari: </span>
-                    <span className="text-primary font-bold">{currentTrack.studentName}</span>
-                    <span className="text-pink ml-1">({currentTrack.className})</span>
+                    <span className="text-primary font-bold">{decodeHtmlEntities(currentTrack.studentName)}</span>
+                    <span className="text-pink ml-1">({decodeHtmlEntities(currentTrack.className)})</span>
                   </div>
                   <div>
                     <span className="text-secondary">Confess Ke: </span>
-                    <span className="text-purple font-black">💘 {currentTrack.targetPerson}</span>
+                    <span className="text-purple font-black">💘 {decodeHtmlEntities(currentTrack.targetPerson)}</span>
                   </div>
                 </div>
 
                 <p className="text-sm font-semibold text-primary italic flex items-start gap-2 pt-1">
                   <MessageCircleHeart className="w-5 h-5 text-pink flex-shrink-0 mt-0.5" />
-                  <span>"{currentTrack.message}"</span>
+                  <span>"{decodeHtmlEntities(currentTrack.message)}"</span>
                 </p>
               </div>
 

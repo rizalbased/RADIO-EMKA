@@ -47,21 +47,23 @@ export interface SongRequest {
   playedAt?: string | null;
 }
 
+import { decodeHtmlEntities } from './lib/textUtils';
+
 export function mapDbRequestToSongRequest(db: DbSongRequest): SongRequest {
   let uiStatus: RequestStatus = 'Queued';
   if (db.status === 'playing') uiStatus = 'Playing';
   else if (db.status === 'played') uiStatus = 'Played';
-  else if (db.status === 'pending') uiStatus = 'Queued';
+  else if (db.status === 'pending' || (db.status as any) === 'queued') uiStatus = 'Queued';
 
   return {
     id: db.id,
     timestamp: db.created_at || new Date().toISOString(),
-    studentName: db.requester_name || 'Anonim',
-    className: db.class_name || '-',
-    songTitle: db.title || 'Judul Lagu',
-    artist: db.channel_title || 'Penyanyi',
-    targetPerson: db.target_person || 'Semua Teman',
-    message: db.message || 'Salam hangat!',
+    studentName: decodeHtmlEntities(db.requester_name) || 'Anonim',
+    className: decodeHtmlEntities(db.class_name) || '-',
+    songTitle: decodeHtmlEntities(db.title) || 'Judul Lagu',
+    artist: decodeHtmlEntities(db.channel_title) || 'Penyanyi',
+    targetPerson: decodeHtmlEntities(db.target_person) || 'Semua Teman',
+    message: decodeHtmlEntities(db.message) || 'Salam hangat!',
     mood: (db.mood as MoodTag) || '🎧 Vibe Check',
     coverUrl: db.thumbnail_url || (db.video_id ? `https://i.ytimg.com/vi/${db.video_id}/hqdefault.jpg` : undefined),
     status: uiStatus,

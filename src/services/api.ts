@@ -219,20 +219,20 @@ export function subscribeSongRequests(
   onUpdate: (requests: SongRequest[]) => void,
   onRadioStateChange?: (state: DbRadioState) => void
 ): () => void {
-  // 1. Fetch initial data from Supabase immediately on mount
-  if (isSupabaseConfigured()) {
-    fetchSongRequestsFromDb().then(({ requests, isSupabase }) => {
-      if (isSupabase) {
-        onUpdate(requests || []);
-      }
-    });
-  } else {
-    onUpdate([]);
-  }
-
   if (isSupabaseConfigured()) {
     console.log('[EMKA REALTIME] Subscribing to emka-radio-global-sync channel...');
     let currentRequests: SongRequest[] = [];
+
+    fetchSongRequestsFromDb().then(({ requests, isSupabase }) => {
+      if (isSupabase && requests) {
+        currentRequests = requests.slice().sort((a, b) => {
+          const tA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const tB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return tA - tB;
+        });
+        onUpdate(currentRequests);
+      }
+    });
 
     const unsubscribeSupabase = subscribeToSongRequests({
       onInsert: (newReq) => {

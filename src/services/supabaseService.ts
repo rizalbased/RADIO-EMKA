@@ -50,11 +50,12 @@ export async function fetchSongRequestsFromDb(): Promise<{
     console.log(`[ADMIN AUTH] role: ${role}`);
     console.log('[ADMIN QUEUE] fetching requests...');
 
-    // 2. Fetch song_requests ordered by created_at ascending (FIFO)
+    // 2. Fetch song_requests ordered by created_at ascending (FIFO) with id tie-breaker
     const { data, error } = await client
       .from('song_requests')
       .select('*')
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true });
 
     console.log('[EMKA ADMIN FETCH]', data, error);
 
@@ -256,25 +257,58 @@ export async function setRadioStandbyInDb(): Promise<{ success: boolean; error?:
   });
 }
 
+// Concurrency lock to prevent duplicate/race transitions
+let isAdvancingLock = false;
+let lastAdvanceTime = 0;
+
 /**
- * Handles track completion (YT.PlayerState.ENDED) - Autoplay FIFO:
- * 1. Marks current track as 'played'.
- * 2. Fetches next pending request directly from Supabase (ordered by created_at ASC).
- * 3. If found, sets status = 'playing' in song_requests and updates radio_state (current_request_id = nextDb.id).
- * 4. If none found, sets radio_state status = 'standby'.
+ * Atomic FIFO transition to next song request:
+ * 1. Idempotency lock prevents concurrent race conditions (e.g. YT ENDED + Admin Skip).
+ * 2. Marks currently playing request(s) as 'played'.
+ * 3. Finds next pending request strictly by `created_at ASC, id ASC`.
+ * 4. Atomically marks chosen request as 'playing' and updates radio_state (row id = 1).
+ * 5. If no requests remain in queue, transitions radio_state to 'standby'.
  */
-export async function handleSongEndedTransition(currentRequestId?: string | null): Promise<{
+export async function advanceToNextSongRequest(currentRequestId?: string | null): Promise<{
   success: boolean;
   nextRequest?: SongRequest | null;
   error?: string;
 }> {
+  const now = Date.now();
+  if (isAdvancingLock || (now - lastAdvanceTime < 1200)) {
+    console.log('[ADVANCE QUEUE] Skipped duplicate/concurrent advance request');
+    return { success: true, nextRequest: null };
+  }
+
+  isAdvancingLock = true;
+  lastAdvanceTime = now;
+
   const client = getSupabaseClient();
-  if (!client) return { success: false, nextRequest: null };
+  if (!client) {
+    isAdvancingLock = false;
+    return { success: false, nextRequest: null, error: 'Supabase client not configured' };
+  }
 
   try {
     const nowIso = new Date().toISOString();
 
-    // 1. Mark current request as 'played'
+    // Step A: Check if custom PostgreSQL RPC is configured in Supabase
+    try {
+      const { data: rpcData, error: rpcErr } = await client.rpc('advance_to_next_song_request', {
+        p_current_request_id: currentRequestId || null
+      });
+      if (!rpcErr && rpcData) {
+        console.log('[ADVANCE RPC] Executed via Supabase RPC:', rpcData);
+        if (rpcData.id) {
+          return { success: true, nextRequest: mapDbRequestToSongRequest(rpcData) };
+        } else {
+          return { success: true, nextRequest: null };
+        }
+      }
+    } catch {}
+
+    // Step B: Robust transactional sequence
+    // 1. Mark target request and any stray 'playing' requests as 'played'
     if (currentRequestId) {
       await client
         .from('song_requests')
@@ -282,16 +316,23 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
         .eq('id', currentRequestId);
     }
 
-    // 2. Fetch next pending request directly from Supabase (FIFO)
+    // Clean up any other rows marked 'playing' to enforce single active playing request rule
+    await client
+      .from('song_requests')
+      .update({ status: 'played', played_at: nowIso, updated_at: nowIso })
+      .eq('status', 'playing');
+
+    // 2. Fetch next pending request directly from Supabase (Strict FIFO: created_at ASC, id ASC)
     const { data: nextRows, error: nextErr } = await client
       .from('song_requests')
       .select('*')
-      .eq('status', 'pending')
+      .in('status', ['pending', 'queued'])
       .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
       .limit(1);
 
     if (nextErr) {
-      console.warn('[AUTOPLAY FIFO] Query next request warning:', nextErr.message);
+      console.warn('[ADVANCE FIFO] Query next request warning:', nextErr.message);
     }
 
     const nextDb = (nextRows && nextRows.length > 0) ? (nextRows[0] as DbSongRequest) : null;
@@ -327,14 +368,29 @@ export async function handleSongEndedTransition(currentRequestId?: string | null
       return { success: true, nextRequest: mapped };
     } else {
       // 5. Standby mode
-      console.log('[AUTOPLAY FIFO] No pending requests. Entering standby.');
+      console.log('[ADVANCE FIFO] No pending requests in queue. Entering standby.');
       await setRadioStandbyInDb();
       return { success: true, nextRequest: null };
     }
   } catch (err: any) {
-    console.error('[AUTOPLAY FIFO] Transition exception:', err);
+    console.error('[ADVANCE FIFO] Transition exception:', err);
     return { success: false, error: err?.message, nextRequest: null };
+  } finally {
+    setTimeout(() => {
+      isAdvancingLock = false;
+    }, 1000);
   }
+}
+
+/**
+ * Backward compatibility alias for handleSongEndedTransition
+ */
+export async function handleSongEndedTransition(currentRequestId?: string | null): Promise<{
+  success: boolean;
+  nextRequest?: SongRequest | null;
+  error?: string;
+}> {
+  return await advanceToNextSongRequest(currentRequestId);
 }
 
 /**

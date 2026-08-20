@@ -14,6 +14,7 @@ import {
 import { SongRequest } from '../types';
 import { useRadioEngine } from '../contexts/RadioEngineContext';
 import { getLastAdminQueueError } from '../services/api';
+import { decodeHtmlEntities } from '../lib/textUtils';
 
 interface QueuePanelProps {
   requests: SongRequest[];
@@ -130,13 +131,13 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
 
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-black text-primary truncate">
-                  {playingTrack.songTitle}
+                  {decodeHtmlEntities(playingTrack.songTitle)}
                 </p>
                 <p className="text-[11px] text-secondary font-medium truncate">
-                  {playingTrack.artist}
+                  {decodeHtmlEntities(playingTrack.artist)}
                 </p>
                 <p className="text-[10px] text-[#FF4F91] font-bold truncate">
-                  {playingTrack.studentName} ({playingTrack.className})
+                  {decodeHtmlEntities(playingTrack.studentName)} ({decodeHtmlEntities(playingTrack.className)})
                 </p>
               </div>
             </div>
@@ -220,10 +221,10 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
                     {/* Track info */}
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-black text-primary truncate group-hover:text-[#FF4F91] transition">
-                        {track.songTitle}
+                        {decodeHtmlEntities(track.songTitle)}
                       </p>
                       <p className="text-[11px] text-secondary font-medium truncate">
-                        {track.artist}
+                        {decodeHtmlEntities(track.artist)}
                       </p>
                     </div>
                   </div>
