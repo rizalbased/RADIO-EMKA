@@ -164,11 +164,28 @@ export async function updateRadioStateInDb(
     const nowIso = new Date().toISOString();
     const payload: any = {
       ...patch,
-      id: 1,
       updated_at: nowIso
     };
 
-    const { data, error } = await executeWithJwtRetry<DbRadioState>(async () =>
+    // 1. First attempt direct UPDATE on row id = 1
+    // This strictly updates provided columns in payload, leaving ALL current_* fields untouched.
+    const { data: updateData, error: updateErr } = await executeWithJwtRetry<DbRadioState>(async () =>
+      await client
+        .from('radio_state')
+        .update(payload)
+        .eq('id', 1)
+        .select()
+        .maybeSingle()
+    );
+
+    if (!updateErr && updateData) {
+      console.log('[RADIO STATE] updated successfully via UPDATE:', patch.status, updateData.current_title);
+      return { success: true, state: updateData as DbRadioState };
+    }
+
+    // 2. Fallback if row id = 1 does not exist yet
+    payload.id = 1;
+    const { data: upsertData, error: upsertErr } = await executeWithJwtRetry<DbRadioState>(async () =>
       await client
         .from('radio_state')
         .upsert(payload, { onConflict: 'id' })
@@ -176,13 +193,13 @@ export async function updateRadioStateInDb(
         .maybeSingle()
     );
 
-    if (error) {
-      console.warn('[RADIO STATE] update error:', error.message);
-      return { success: false, error: error.message };
+    if (upsertErr) {
+      console.warn('[RADIO STATE] update error:', upsertErr.message);
+      return { success: false, error: upsertErr.message };
     }
 
-    console.log('[RADIO STATE] updated successfully:', patch.status, patch.current_title);
-    return { success: true, state: data as DbRadioState };
+    console.log('[RADIO STATE] updated successfully via UPSERT:', patch.status);
+    return { success: true, state: upsertData as DbRadioState };
   } catch (err: any) {
     console.error('[RADIO STATE] update exception:', err);
     return { success: false, error: err?.message };
@@ -331,6 +348,7 @@ export async function advanceToNextSongRequest(currentRequestId?: string | null)
 
   isAdvancingLock = true;
   lastAdvanceTime = now;
+  console.log('[QUEUE NEXT] Advancing FIFO queue to next song...');
 
   const client = getSupabaseClient();
   if (!client) {

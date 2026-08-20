@@ -635,29 +635,61 @@ export const RadioEngineProvider: React.FC<{
   // Play / Pause toggle: Admin updates global radio_state; User only controls local player
   const togglePlayPause = async () => {
     const controller = playerControllerRef.current;
-    const isPlaying = ytPlayerStateRef.current === 1 || radioStateRef.current?.status === 'playing';
+    const currentState = radioStateRef.current;
+    const isCurrentlyPlaying = ytPlayerStateRef.current === 1 || currentState?.status === 'playing';
 
     if (userRoleRef.current === 'admin') {
-      console.log('[ADMIN PLAY/PAUSE CLICK] Current isPlaying:', isPlaying);
-      if (isPlaying) {
-        // 1. Update Supabase radio_state -> paused with currentTime
+      console.log('[RADIO PLAY] status sebelum:', currentState?.status, 'current_request_id:', currentState?.current_request_id, 'current_video_id:', currentState?.current_video_id);
+
+      if (isCurrentlyPlaying) {
+        // --- PAUSE ACTION ---
+        console.log('[ADMIN PAUSE CLICK]');
         const curTime = controller ? controller.getCurrentTime() : ytCurrentTimeRef.current;
         await setAdminPauseRadio(curTime);
-        // 2. Pause YouTube Player
         if (controller) {
           controller.pause();
         }
       } else {
-        // 1. Update Supabase radio_state -> playing
-        await setAdminResumeRadio();
-        // 2. Resume YouTube Player
-        if (controller) {
-          controller.play();
-          setIsAutoplayBlocked(false);
-        } else if (radioStateRef.current?.current_video_id) {
-          playTrackVideoId(radioStateRef.current.current_video_id);
+        // --- PLAY / RESUME ACTION ---
+        // Check if this is a RESUME of a paused or active track in radio_state:
+        if (
+          currentState &&
+          (currentState.status === 'paused' || currentState.current_request_id || currentState.current_video_id) &&
+          currentState.current_video_id
+        ) {
+          console.log('[RADIO RESUME] Resuming current request:', currentState.current_request_id, 'current_video_id:', currentState.current_video_id, 'current_time:', currentState.current_time);
+
+          // 1. Update Supabase radio_state -> status = 'playing' (preserving all current_* fields)
+          await setAdminResumeRadio();
+          console.log('[RADIO RESUME SUCCESS]');
+
+          // 2. Play on YouTube Player
+          const validVid = extractValidYouTubeId(currentState.current_video_id);
+          if (controller && validVid) {
+            console.log('[PLAYER RESUME] videoId:', validVid, 'currentTime:', currentState.current_time);
+
+            // Check if player already has this video loaded
+            const loadedData = typeof controller.getVideoData === 'function' ? controller.getVideoData() : null;
+            const currentVidInPlayer = loadedData?.video_id || currentLoadedIdRef.current;
+
+            if (currentVidInPlayer === validVid) {
+              controller.play();
+            } else {
+              controller.loadVideo(validVid);
+              if (currentState.current_time && currentState.current_time > 0) {
+                controller.seekTo(currentState.current_time);
+              }
+              controller.play();
+            }
+            setIsAutoplayBlocked(false);
+          } else if (validVid) {
+            playTrackVideoId(validVid);
+          }
         } else if (queuedRequestsRef.current.length > 0) {
+          // No current song exists at all, play first item in queue
           await playQueueTrack(queuedRequestsRef.current[0]);
+        } else {
+          console.log('[RADIO PLAY] No current track and queue is empty');
         }
       }
     } else {
@@ -672,8 +704,9 @@ export const RadioEngineProvider: React.FC<{
         if (controller) {
           controller.play();
           setIsAutoplayBlocked(false);
-        } else if (radioStateRef.current?.current_video_id) {
-          playTrackVideoId(radioStateRef.current.current_video_id);
+        } else if (currentState?.current_video_id) {
+          const validVid = extractValidYouTubeId(currentState.current_video_id);
+          if (validVid) playTrackVideoId(validVid);
         }
         setYtPlayerState(1);
       }
