@@ -139,13 +139,22 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
               </div>
             </div>
 
-            {/* Visualizer bars */}
-            <div className="flex items-end space-x-0.5 h-5 flex-shrink-0 px-2">
-              <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : 'h-1'}`}></span>
-              <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : 'h-2'}`}></span>
-              <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : 'h-3'}`}></span>
-              <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : 'h-2'}`}></span>
-              <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : 'h-1.5'}`}></span>
+            {/* Visualizer bars & Delete button */}
+            <div className="flex items-center space-x-2 flex-shrink-0">
+              <div className="flex items-end space-x-0.5 h-5 px-1">
+                <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-1' : 'h-1'}`}></span>
+                <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-2' : 'h-2'}`}></span>
+                <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-3' : 'h-3'}`}></span>
+                <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-4' : 'h-2'}`}></span>
+                <span className={`w-1 bg-[#B6FF00] rounded-full transition-all ${isPlaying ? 'eq-bar-5' : 'h-1.5'}`}></span>
+              </div>
+              <button
+                onClick={() => onDeleteRequest(playingTrack.id)}
+                className="p-1.5 rounded-lg text-secondary hover:text-rose-500 hover:bg-rose-500/10 transition"
+                title="Hapus request ini"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         ) : (

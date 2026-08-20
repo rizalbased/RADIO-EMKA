@@ -267,9 +267,11 @@ export default function App() {
   const handleDeleteRequest = async (requestOrId: SongRequest | string) => {
     const requestId = typeof requestOrId === 'string' ? requestOrId : requestOrId?.id;
     if (!requestId) {
-      console.error('[QUEUE DELETE] Missing request ID');
+      console.error('[DELETE REQUEST] Missing request ID');
       return;
     }
+
+    console.log('[DELETE REQUEST]', requestId);
 
     const reqObj = typeof requestOrId === 'object' ? requestOrId : requests.find((r) => r.id === requestId);
     const title = reqObj?.songTitle || reqObj?.title || '';
@@ -279,9 +281,9 @@ export default function App() {
       return;
     }
 
-    const success = await deleteSongRequest(requestId);
+    const result = await deleteSongRequest(requestId);
 
-    if (!success) {
+    if (!result.success) {
       alert('Request gagal dihapus dari database.');
       return;
     }
@@ -289,18 +291,23 @@ export default function App() {
     console.log('[DELETE SUCCESS]', requestId);
     setRequests((prev) => prev.filter((r) => r.id !== requestId));
 
-    // If deleted track was the currently playing track, immediately reset radioState
-    if (radioState?.current_request_id === requestId) {
-      setRadioState((prev) => prev ? {
-        ...prev,
-        status: 'standby',
-        current_request_id: null,
-        current_video_id: null,
-        current_title: null,
-        current_channel_title: null,
-        current_thumbnail_url: null,
-        started_at: null
-      } : null);
+    // If deleted track was the currently playing track, immediately reset radioState to standby
+    if (result.was_playing || radioState?.current_request_id === requestId) {
+      console.log('[DELETE CURRENT SONG] Current track was deleted, entering standby');
+      setRadioState((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'standby',
+              current_request_id: null,
+              current_video_id: null,
+              current_title: null,
+              current_channel_title: null,
+              current_thumbnail_url: null,
+              started_at: null
+            }
+          : null
+      );
     }
   };
 

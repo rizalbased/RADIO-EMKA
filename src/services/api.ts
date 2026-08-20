@@ -259,7 +259,7 @@ export function subscribeSongRequests(
       },
       onDelete: (deletedId) => {
         if (!deletedId) return;
-        console.log('[QUEUE REALTIME] DELETE', deletedId);
+        console.log('[REALTIME REQUEST DELETE]', deletedId);
         currentRequests = currentRequests.filter((r) => r.id !== deletedId);
         onUpdate(currentRequests);
       },
@@ -429,24 +429,26 @@ export async function likeRequest(requestId: string): Promise<{ success: boolean
   return { success: true, likes: newLikes };
 }
 
-export async function deleteSongRequest(requestId: string): Promise<boolean> {
+export async function deleteSongRequest(requestId: string): Promise<{ success: boolean; was_playing?: boolean }> {
   if (!requestId) {
-    console.error('[QUEUE DELETE] Missing request ID');
-    return false;
+    console.error('[DELETE REQUEST] Missing request ID');
+    return { success: false };
   }
 
+  let wasPlaying = false;
   if (isSupabaseConfigured()) {
-    const success = await deleteDbSongRequest(requestId);
-    if (!success) {
-      console.error('[QUEUE DELETE] Supabase delete failed for ID:', requestId);
-      return false;
+    const res = await deleteDbSongRequest(requestId);
+    if (!res.success) {
+      console.error('[DELETE REQUEST] Supabase delete failed for ID:', requestId);
+      return { success: false };
     }
+    wasPlaying = Boolean(res.was_playing);
   }
 
   const current = getLocalRequests().filter(r => r.id !== requestId);
   saveLocalRequests(current);
   window.dispatchEvent(new Event('storage'));
-  return true;
+  return { success: true, was_playing: wasPlaying };
 }
 
 export async function clearAllSongRequests(): Promise<{ success: boolean; requests: SongRequest[] }> {

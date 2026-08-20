@@ -261,7 +261,7 @@ export const RadioEngineProvider: React.FC<{
         console.log('[RADIO ENGINE] Standby state / no active track');
         if (playerControllerRef.current) {
           try {
-            playerControllerRef.current.pause();
+            playerControllerRef.current.stopVideo();
           } catch {}
         }
         setYtVideoId(null);
@@ -446,7 +446,7 @@ export const RadioEngineProvider: React.FC<{
         setYtDuration(0);
         currentLoadedIdRef.current = null;
         if (playerControllerRef.current) {
-          try { playerControllerRef.current.pause(); } catch {}
+          try { playerControllerRef.current.stopVideo(); } catch {}
         }
       }
     } catch (e) {

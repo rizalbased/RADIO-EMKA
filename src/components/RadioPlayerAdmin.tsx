@@ -218,14 +218,25 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
               </div>
             </div>
 
-            {playingTrack && onOpenStoryModal && (
-              <button
-                onClick={() => onOpenStoryModal(playingTrack)}
-                className="px-3.5 py-2 rounded-xl bg-card border border-primary hover:border-pink text-xs font-black text-primary hover:text-pink transition flex items-center gap-1.5 flex-shrink-0 shadow-sm active:scale-95"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-pink" />
-                <span>Story Card 9:16</span>
-              </button>
+            {playingTrack && (
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {onOpenStoryModal && (
+                  <button
+                    onClick={() => onOpenStoryModal(playingTrack)}
+                    className="px-3.5 py-2 rounded-xl bg-card border border-primary hover:border-pink text-xs font-black text-primary hover:text-pink transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-pink" />
+                    <span>Story Card 9:16</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => onDeleteRequest(playingTrack.id)}
+                  className="p-2 rounded-xl bg-card hover:bg-rose-500/10 text-secondary hover:text-rose-500 border border-subtle transition active:scale-95"
+                  title="Hapus lagu yang sedang diputar"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             )}
           </div>
 
@@ -386,6 +397,13 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
                       Request: {playingTrack.studentName} ({playingTrack.className})
                     </p>
                   </div>
+                  <button
+                    onClick={() => onDeleteRequest(playingTrack.id)}
+                    className="p-1.5 rounded-lg text-secondary hover:text-rose-500 hover:bg-rose-500/10 transition"
+                    title="Hapus lagu ini"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               ) : (
                 <div className="p-4 rounded-2xl border-2 border-dashed border-subtle text-center text-xs font-bold text-secondary bg-elevated">

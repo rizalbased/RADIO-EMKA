@@ -695,44 +695,41 @@ export async function likeDbSongRequest(requestId: string): Promise<{ success: b
   }
 }
 
-export async function deleteDbSongRequest(requestId: string): Promise<boolean> {
+export async function deleteDbSongRequest(requestId: string): Promise<{ success: boolean; was_playing?: boolean }> {
   if (!requestId) {
     console.error('[DELETE REQUEST] Missing request ID');
-    return false;
+    return { success: false };
   }
 
   console.log('[DELETE REQUEST]', requestId);
 
   const client = getSupabaseClient();
   if (!client) {
-    console.error('[QUEUE DELETE] Supabase client not available');
-    return false;
+    console.error('[DELETE REQUEST] Supabase client not available');
+    return { success: false };
   }
 
   try {
-    // Check if the request being deleted is currently playing in radio_state
-    const { data: currentState } = await client
-      .from('radio_state')
-      .select('current_request_id')
-      .eq('id', 1)
-      .maybeSingle();
-
-    const isCurrentPlaying = currentState?.current_request_id === requestId;
-
-    const { data, error } = await client
-      .from('song_requests')
-      .delete()
-      .eq('id', requestId)
-      .select();
+    const { data, error } = await client.rpc('delete_song_request', {
+      p_request_id: requestId
+    });
 
     if (error) {
-      console.error('[QUEUE DELETE] failed:', error);
-      return false;
+      console.error('[DELETE REQUEST] RPC ERROR:', error);
+      return { success: false };
     }
 
-    if (!data || data.length === 0) {
-      console.error('[QUEUE DELETE] No row deleted:', requestId);
-      return false;
+    console.log('[DELETE REQUEST] RPC RESULT:', data);
+
+    const isSuccess =
+      data === true ||
+      data?.success === true ||
+      (typeof data === 'object' && data !== null && !('error' in data) && data?.success !== false);
+    const wasPlaying = Boolean(data?.was_playing ?? data?.wasPlaying);
+
+    if (!isSuccess) {
+      console.error('[DELETE REQUEST] RPC returned unsuccessful result:', data);
+      return { success: false, was_playing: wasPlaying };
     }
 
     // Database verification: Pastikan row benar-benar hilang dari database
@@ -742,33 +739,15 @@ export async function deleteDbSongRequest(requestId: string): Promise<boolean> {
       .eq('id', requestId);
 
     if (verifyData && verifyData.length > 0) {
-      console.error('[QUEUE DELETE] DATABASE ROW STILL EXISTS', requestId);
-      return false;
-    }
-
-    // Jika lagu yang dihapus adalah current playing track, pastikan radio_state dibersihkan
-    if (isCurrentPlaying) {
-      console.log('[CURRENT REQUEST DELETE] Deleted current playing track, resetting radio_state to standby');
-      await client
-        .from('radio_state')
-        .update({
-          status: 'standby',
-          current_request_id: null,
-          current_video_id: null,
-          current_title: null,
-          current_channel_title: null,
-          current_thumbnail_url: null,
-          started_at: null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', 1);
+      console.error('[DELETE REQUEST] DATABASE ROW STILL EXISTS:', requestId);
+      return { success: false, was_playing: wasPlaying };
     }
 
     console.log('[DELETE SUCCESS]', requestId);
-    return true;
+    return { success: true, was_playing: wasPlaying };
   } catch (err) {
-    console.error('[QUEUE DELETE] Exception during delete:', err);
-    return false;
+    console.error('[DELETE REQUEST] Exception during RPC delete:', err);
+    return { success: false };
   }
 }
 

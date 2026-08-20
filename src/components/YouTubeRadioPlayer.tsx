@@ -4,6 +4,7 @@ export interface PlayerController {
   loadVideo: (videoId: string) => void;
   play: () => void;
   pause: () => void;
+  stopVideo: () => void;
   seekTo: (seconds: number) => void;
   setVolume: (volume: number) => void;
   setMuted: (muted: boolean) => void;
@@ -178,6 +179,16 @@ export const YouTubeRadioPlayer: React.FC<YouTubeRadioPlayerProps> = ({
         if (!player || !readyRef.current) return;
         player.pauseVideo();
         console.log('[PLAYER] PAUSE EXECUTED');
+      },
+      stopVideo: () => {
+        const player = playerRef.current;
+        if (!player || !readyRef.current) return;
+        if (typeof player.stopVideo === 'function') {
+          player.stopVideo();
+        } else if (typeof player.pauseVideo === 'function') {
+          player.pauseVideo();
+        }
+        console.log('[PLAYER] STOP EXECUTED');
       },
       seekTo: (seconds: number) => {
         if (playerRef.current && readyRef.current) {
