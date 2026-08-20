@@ -17,6 +17,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
     ytDuration,
     ytVideoId,
     activeTrackMetadata,
+    radioState,
     togglePlayPause,
     handleNextRequest,
     handlePreviousRequest
@@ -26,8 +27,9 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ activeTab, setActiveTab,
   if (userRole !== 'admin') return null;
   if (activeTab === 'player') return null;
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
-  const isPlaying = ytPlayerState === 1;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
+  const playingTrack = (currentPlayingId ? requests.find((r) => r.id === currentPlayingId) : null) || requests.find((r) => r.status === 'Playing' || r.status === 'playing');
+  const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
   const isBuffering = ytPlayerState === 3;
 
   const displayTitle = activeTrackMetadata?.title || playingTrack?.songTitle || 'EMKA Radio Standby';

@@ -41,13 +41,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const {
     ytPlayerState,
+    radioState,
     togglePlayPause,
     handleNextRequest,
     handlePreviousRequest
   } = useRadioEngine();
 
-  const playingTrack = requests.find((r) => r.status === 'Playing');
-  const isPlaying = ytPlayerState === 1;
+  const currentPlayingId = (radioState && (radioState.status === 'playing' || radioState.status === 'paused')) ? radioState.current_request_id : null;
+  const playingTrack = (currentPlayingId ? requests.find((r) => r.id === currentPlayingId) : null) || requests.find((r) => r.status === 'Playing' || r.status === 'playing');
+  const isPlaying = ytPlayerState === 1 || radioState?.status === 'playing';
 
   const menuItems: { id: MainTabType; label: string; icon: React.ReactNode; badge?: string }[] = [
     { id: 'feed', label: 'Dashboard', icon: <Home className="w-4 h-4" /> },

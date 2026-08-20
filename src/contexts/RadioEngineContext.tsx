@@ -229,13 +229,21 @@ export const RadioEngineProvider: React.FC<{
     else controller.setMuted(false);
 
     const state = radioStateRef.current;
-    if (state && state.status === 'playing' && state.current_request_id && state.current_video_id) {
+    if (state && (state.status === 'playing' || state.status === 'paused') && state.current_request_id && state.current_video_id) {
       const validId = extractValidYouTubeId(state.current_video_id);
       if (validId) {
         currentLoadedIdRef.current = validId;
         setYtVideoId(validId);
         ytVideoIdRef.current = validId;
         controller.loadVideo(validId);
+        if (state.current_time && state.current_time > 0) {
+          controller.seekTo(state.current_time);
+        }
+        if (state.status === 'playing') {
+          controller.play();
+        } else {
+          controller.pause();
+        }
       }
     }
   }, []);
@@ -342,18 +350,18 @@ export const RadioEngineProvider: React.FC<{
 
     // Match with request metadata
     const matchedReq = requestsRef.current.find((r) => r.id === state.current_request_id);
-    setActiveTrackMetadata({
+    setActiveTrackMetadata((prev) => ({
       videoId: validId,
-      title: state.current_title || matchedReq?.songTitle || 'EMKA Radio Track',
-      channelTitle: state.current_channel_title || matchedReq?.artist || 'EMKA FM',
-      thumbnail: state.current_thumbnail_url || matchedReq?.coverUrl || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
-      duration: 0,
-      currentTime: 0,
-      studentName: matchedReq?.studentName,
-      className: matchedReq?.className,
-      targetPerson: matchedReq?.targetPerson,
-      mood: matchedReq?.mood
-    });
+      title: state.current_title || matchedReq?.songTitle || prev?.title || 'EMKA Radio Track',
+      channelTitle: state.current_channel_title || matchedReq?.artist || prev?.channelTitle || 'EMKA FM',
+      thumbnail: state.current_thumbnail_url || matchedReq?.coverUrl || prev?.thumbnail || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
+      duration: prev?.duration || 0,
+      currentTime: prev?.currentTime || state.current_time || 0,
+      studentName: matchedReq?.studentName || prev?.studentName,
+      className: matchedReq?.className || prev?.className,
+      targetPerson: matchedReq?.targetPerson || prev?.targetPerson,
+      mood: matchedReq?.mood || prev?.mood
+    }));
   }, []);
 
   // Sync prop changes for radioState across all devices
@@ -372,7 +380,7 @@ export const RadioEngineProvider: React.FC<{
           console.log('[RADIO STATE] Initial load:', state.status, state.current_title);
           setRadioState(state);
           radioStateRef.current = state;
-          if (state.status === 'playing' && state.current_video_id && state.current_request_id) {
+          if ((state.status === 'playing' || state.status === 'paused') && state.current_video_id && state.current_request_id) {
             const validId = extractValidYouTubeId(state.current_video_id);
             if (validId) {
               setYtVideoId(validId);
@@ -384,10 +392,18 @@ export const RadioEngineProvider: React.FC<{
                 channelTitle: state.current_channel_title || 'EMKA FM',
                 thumbnail: state.current_thumbnail_url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
                 duration: 0,
-                currentTime: 0
+                currentTime: state.current_time || 0
               });
               if (playerControllerRef.current) {
                 playerControllerRef.current.loadVideo(validId);
+                if (state.current_time && state.current_time > 0) {
+                  playerControllerRef.current.seekTo(state.current_time);
+                }
+                if (state.status === 'playing') {
+                  playerControllerRef.current.play();
+                } else {
+                  playerControllerRef.current.pause();
+                }
               }
             }
           } else {
