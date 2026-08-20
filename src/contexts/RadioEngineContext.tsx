@@ -7,6 +7,7 @@ import {
   setAdminPlaySong,
   setAdminPauseRadio,
   setAdminResumeRadio,
+  setAdminStopRadio,
   setRadioStandbyInDb,
   handleSongEndedTransition,
   updateRequestYoutubeVideoId,
@@ -124,6 +125,7 @@ interface RadioEngineContextProps {
   toggleShuffle: () => void;
   toggleRepeat: () => void;
   togglePlayPause: () => Promise<void>;
+  handleStopRadio: () => Promise<void>;
   toggleMute: () => void;
   startRadioPlayback: () => Promise<void>;
   handleSeekChange: (val: number) => void;
@@ -257,8 +259,10 @@ export const RadioEngineProvider: React.FC<{
       radioStateRef.current = radioStateProp;
 
       const state = radioStateProp;
+      console.log('[REALTIME] PLAYER SYNC - radio_state:', state?.status, state?.current_title);
+
       if (!state || state.status === 'standby' || !state.current_request_id || !state.current_video_id) {
-        console.log('[RADIO ENGINE] Standby state / no active track');
+        console.log('[REALTIME] PLAYER SYNC - Standby mode: stopping player');
         if (playerControllerRef.current) {
           try {
             playerControllerRef.current.stopVideo();
@@ -268,13 +272,14 @@ export const RadioEngineProvider: React.FC<{
         setActiveTrackMetadata(null);
         setYtCurrentTime(0);
         setYtDuration(0);
+        setYtPlayerState(0);
         currentLoadedIdRef.current = null;
         ytVideoIdRef.current = null;
       } else if (state.status === 'playing' && state.current_video_id && state.current_request_id) {
         const validId = extractValidYouTubeId(state.current_video_id);
         if (validId) {
           if (currentLoadedIdRef.current !== validId) {
-            console.log('[RADIO ENGINE] Synchronizing video playback from radio_state:', validId);
+            console.log('[REALTIME] PLAYER SYNC - Loading new video:', validId);
             setYtVideoId(validId);
             ytVideoIdRef.current = validId;
             currentLoadedIdRef.current = validId;
@@ -282,18 +287,28 @@ export const RadioEngineProvider: React.FC<{
               playerControllerRef.current.loadVideo(validId);
               playerControllerRef.current.play();
             }
+          } else if (playerControllerRef.current && ytPlayerStateRef.current !== 1) {
+            playerControllerRef.current.play();
           }
+
+          // Match with request if available to get student/class info
+          const matchedReq = requestsRef.current.find((r) => r.id === state.current_request_id);
 
           setActiveTrackMetadata({
             videoId: validId,
-            title: state.current_title || 'EMKA Radio Track',
-            channelTitle: state.current_channel_title || 'EMKA FM',
-            thumbnail: state.current_thumbnail_url || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
+            title: state.current_title || matchedReq?.songTitle || 'EMKA Radio Track',
+            channelTitle: state.current_channel_title || matchedReq?.artist || 'EMKA FM',
+            thumbnail: state.current_thumbnail_url || matchedReq?.coverUrl || `https://i.ytimg.com/vi/${validId}/hqdefault.jpg`,
             duration: 0,
-            currentTime: 0
+            currentTime: 0,
+            studentName: matchedReq?.studentName,
+            className: matchedReq?.className,
+            targetPerson: matchedReq?.targetPerson,
+            mood: matchedReq?.mood
           });
         }
       } else if (state.status === 'paused') {
+        console.log('[REALTIME] PLAYER SYNC - Pausing player');
         if (playerControllerRef.current) {
           try {
             playerControllerRef.current.pause();
@@ -590,6 +605,23 @@ export const RadioEngineProvider: React.FC<{
     }
   };
 
+  const handleStopRadio = async () => {
+    console.log('[ADMIN STOP] Stopping radio playback and entering standby');
+    await setAdminStopRadio();
+    if (playerControllerRef.current) {
+      try {
+        playerControllerRef.current.stopVideo();
+      } catch {}
+    }
+    setYtVideoId(null);
+    setActiveTrackMetadata(null);
+    setYtCurrentTime(0);
+    setYtDuration(0);
+    setYtPlayerState(0);
+    currentLoadedIdRef.current = null;
+    ytVideoIdRef.current = null;
+  };
+
   const startRadioPlayback = async () => {
     await togglePlayPause();
   };
@@ -691,6 +723,7 @@ export const RadioEngineProvider: React.FC<{
       toggleShuffle,
       toggleRepeat,
       togglePlayPause,
+      handleStopRadio,
       toggleMute,
       startRadioPlayback,
       handleSeekChange,

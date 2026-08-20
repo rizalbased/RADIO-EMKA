@@ -13,6 +13,7 @@ import {
   setAdminPlaySong,
   setAdminPauseRadio,
   setAdminResumeRadio,
+  setAdminStopRadio,
   setRadioStandbyInDb,
   handleSongEndedTransition,
   getLastAdminQueueError,
@@ -36,6 +37,7 @@ export {
   setAdminPlaySong,
   setAdminPauseRadio,
   setAdminResumeRadio,
+  setAdminStopRadio,
   setRadioStandbyInDb,
   handleSongEndedTransition
 };

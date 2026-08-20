@@ -232,6 +232,14 @@ export async function setAdminResumeRadio(): Promise<{ success: boolean; error?:
 }
 
 /**
+ * Admin action: Stop radio / set Standby.
+ */
+export async function setAdminStopRadio(): Promise<{ success: boolean; error?: string }> {
+  console.log('[RADIO STATE] standby');
+  return await setRadioStandbyInDb();
+}
+
+/**
  * Standby state when no song is playing.
  */
 export async function setRadioStandbyInDb(): Promise<{ success: boolean; error?: string }> {
@@ -352,10 +360,10 @@ export function subscribeToSongRequests(callbacks: {
     realtimeChannel = null;
   }
 
-  console.log('[EMKA REALTIME]\nSUBSCRIBING');
+  console.log('[EMKA REALTIME] Subscribing to emka-radio-realtime channel...');
 
   const channel = client
-    .channel('emka-radio-song-requests')
+    .channel('emka-radio-realtime')
     .on(
       'postgres_changes',
       {
@@ -363,23 +371,30 @@ export function subscribeToSongRequests(callbacks: {
         schema: 'public',
         table: 'song_requests'
       },
-      (payload) => {
-        console.log('[EMKA REALTIME]', payload);
+      async (payload) => {
         if (payload.eventType === 'INSERT' && payload.new) {
-          console.log('[EMKA REALTIME INSERT]', payload.new);
+          console.log('[REALTIME] SONG REQUEST INSERT', payload.new);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onInsert?.(req);
         } else if (payload.eventType === 'UPDATE' && payload.new) {
+          console.log('[REALTIME] SONG REQUEST UPDATE', payload.new);
           const req = mapDbRequestToSongRequest(payload.new as DbSongRequest);
           callbacks.onUpdate?.(req);
         } else if (payload.eventType === 'DELETE') {
           const deletedId = payload.old?.id;
+          console.log('[REALTIME] SONG REQUEST DELETE', payload.old);
           if (deletedId) {
-            console.log('[REALTIME REQUEST DELETE]', deletedId);
             callbacks.onDelete?.(deletedId);
-          } else {
-            console.warn('[REALTIME REQUEST DELETE] received without payload.old.id:', payload);
           }
+        }
+
+        // Always sync queue directly with Supabase to ensure absolute consistency
+        try {
+          const { requests } = await fetchSongRequestsFromDb();
+          console.log('[REALTIME] QUEUE SYNC', requests?.length);
+          callbacks.onSyncAll?.(requests);
+        } catch (e) {
+          console.error('[REALTIME] Error refreshing queue after event:', e);
         }
       }
     )
@@ -391,10 +406,11 @@ export function subscribeToSongRequests(callbacks: {
         table: 'radio_state'
       },
       (payload) => {
+        console.log('[REALTIME] RADIO STATE UPDATE', payload);
         const rawNew = payload.new as any;
         if (rawNew && rawNew.id === 1) {
-          console.log('[REALTIME RADIO STATE]', rawNew.current_request_id);
           console.log('[RADIO STATE]', rawNew.status);
+          console.log('[REALTIME RADIO STATE]', rawNew.current_request_id);
           callbacks.onRadioStateChange?.(rawNew as DbRadioState);
         }
       }
@@ -403,6 +419,7 @@ export function subscribeToSongRequests(callbacks: {
       console.log('[EMKA REALTIME STATUS]', status);
       if (status === 'SUBSCRIBED') {
         fetchSongRequestsFromDb().then(({ requests }) => {
+          console.log('[REALTIME] QUEUE SYNC', requests?.length);
           callbacks.onSyncAll?.(requests);
         });
         fetchRadioStateFromDb().then(({ state }) => {

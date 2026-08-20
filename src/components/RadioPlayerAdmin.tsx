@@ -16,7 +16,8 @@ import {
   Disc,
   Layers,
   Heart,
-  MessageSquare
+  MessageSquare,
+  Square
 } from 'lucide-react';
 import { SongRequest } from '../types';
 
@@ -46,6 +47,7 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
     autoPlay,
     toggleAutoPlay,
     togglePlayPause,
+    handleStopRadio,
     toggleMute,
     handleSeekChange,
     handleNextRequest,
@@ -272,6 +274,15 @@ export const RadioPlayerAdmin: React.FC<RadioPlayerAdminProps> = ({
                 title="Tandai lagu saat ini sebagai Selesai Diputar"
               >
                 Tandai Selesai
+              </button>
+
+              <button
+                onClick={handleStopRadio}
+                className="px-3 py-1.5 rounded-xl bg-elevated hover:bg-rose-500/10 text-xs font-bold text-secondary hover:text-rose-500 transition border border-subtle flex items-center gap-1.5"
+                title="Hentikan siaran radio (masuk mode Standby)"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop</span>
               </button>
             </div>
 
