@@ -4,11 +4,16 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Content-Type': 'application/json'
-};
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Max-Age': '86400',
+    'Content-Type': 'application/json'
+  };
+}
 
 function decodeHtmlEntities(str: string): string {
   if (!str) return '';
@@ -42,11 +47,29 @@ function scoreCandidate(item: any, cleanTitle: string, cleanArtist: string): num
   // 1. Title match
   if (lowerTitle && videoTitle.includes(lowerTitle)) {
     score += 40;
+  } else if (lowerTitle) {
+    const titleWords = lowerTitle.split(/\s+/).filter((w: string) => w.length > 2);
+    let matchedWords = 0;
+    for (const w of titleWords) {
+      if (videoTitle.includes(w)) matchedWords++;
+    }
+    if (titleWords.length > 0 && matchedWords / titleWords.length >= 0.6) {
+      score += 25;
+    }
   }
 
   // 2. Artist match in video title or channel title
   if (lowerArtist && (videoTitle.includes(lowerArtist) || channelTitle.includes(lowerArtist))) {
     score += 30;
+  } else if (lowerArtist) {
+    const artistWords = lowerArtist.split(/\s+/).filter((w: string) => w.length > 2);
+    let matchedArtistWords = 0;
+    for (const w of artistWords) {
+      if (videoTitle.includes(w) || channelTitle.includes(w)) matchedArtistWords++;
+    }
+    if (artistWords.length > 0 && matchedArtistWords / artistWords.length >= 0.5) {
+      score += 15;
+    }
   }
 
   // 3. Official video / Audio / MV markers
@@ -55,32 +78,45 @@ function scoreCandidate(item: any, cleanTitle: string, cleanArtist: string): num
     videoTitle.includes('official video') ||
     videoTitle.includes('official audio') ||
     videoTitle.includes('official lyric video') ||
+    videoTitle.includes('lyric video') ||
     videoTitle.includes('mv')
   ) {
     score += 15;
   }
 
   // 4. Topic channel or Official Artist Channel
-  if (channelTitle.includes('topic') || channelTitle.includes('official')) {
+  if (channelTitle.includes('topic') || channelTitle.includes('official') || channelTitle.includes('vevo')) {
     score += 15;
   }
 
-  // 5. Penalties for non-original content
-  if (
-    (!lowerTitle.includes('cover') && videoTitle.includes('cover')) ||
-    (!lowerTitle.includes('karaoke') && videoTitle.includes('karaoke')) ||
-    (!lowerTitle.includes('reaction') && videoTitle.includes('reaction')) ||
-    (!lowerTitle.includes('instrumental') && videoTitle.includes('instrumental'))
-  ) {
-    score -= 25;
+  // 5. Penalties for non-original / undesired content
+  if (!lowerTitle.includes('cover') && videoTitle.includes('cover')) {
+    score -= 30;
+  }
+  if (!lowerTitle.includes('karaoke') && videoTitle.includes('karaoke')) {
+    score -= 30;
+  }
+  if (!lowerTitle.includes('reaction') && videoTitle.includes('reaction')) {
+    score -= 30;
+  }
+  if (!lowerTitle.includes('instrumental') && videoTitle.includes('instrumental')) {
+    score -= 30;
+  }
+  if (!lowerTitle.includes('remix') && videoTitle.includes('remix')) {
+    score -= 20;
+  }
+  if (videoTitle.includes('parodi') || videoTitle.includes('parody')) {
+    score -= 40;
   }
 
   return score;
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
+  const corsHeaders = getCorsHeaders(req);
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { status: 200, headers: corsHeaders });
   }
 
   try {
@@ -99,11 +135,11 @@ serve(async (req) => {
 
     const cleanTitle = normalizeText(title);
     const cleanArtist = normalizeText(artist);
-    const query = `${cleanTitle} ${cleanArtist}`.replace(/\s+/g, ' ').trim();
+    const query = cleanArtist ? `${cleanTitle} ${cleanArtist}`.replace(/\s+/g, ' ').trim() : cleanTitle;
 
     console.log(`[YOUTUBE MATCH EDGE FUNCTION] Query: "${query}"`);
 
-    if (!query) {
+    if (!cleanTitle && !query) {
       return new Response(
         JSON.stringify({ success: false, error: 'QUERY_EMPTY', message: 'Judul dan artis lagu wajib diisi.' }),
         { status: 400, headers: corsHeaders }
@@ -112,14 +148,18 @@ serve(async (req) => {
 
     const apiKey = Deno.env.get('YOUTUBE_API_KEY');
     if (!apiKey) {
-      console.error('[YOUTUBE MATCH EDGE FUNCTION] YOUTUBE_API_KEY secret is missing');
+      console.error('[YOUTUBE MATCH EDGE FUNCTION] YOUTUBE_API_KEY secret is missing in Supabase Edge Function environment');
       return new Response(
-        JSON.stringify({ success: false, error: 'YOUTUBE_API_KEY_MISSING', message: 'Secret YOUTUBE_API_KEY belum dikonfigurasi pada Edge Function.' }),
+        JSON.stringify({
+          success: false,
+          error: 'YOUTUBE_API_KEY_MISSING',
+          message: 'Secret YOUTUBE_API_KEY belum dikonfigurasi pada Supabase Edge Function.'
+        }),
         { status: 500, headers: corsHeaders }
       );
     }
 
-    const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoEmbeddable=true&maxResults=6&key=${apiKey}`;
+    const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoEmbeddable=true&maxResults=8&key=${apiKey}`;
     const ytRes = await fetch(ytUrl);
 
     if (!ytRes.ok) {
@@ -150,7 +190,11 @@ serve(async (req) => {
       }
 
       return new Response(
-        JSON.stringify({ success: false, error: 'YOUTUBE_API_ERROR', message: `Gagal memanggil YouTube API (Status ${status}).` }),
+        JSON.stringify({
+          success: false,
+          error: 'YOUTUBE_API_ERROR',
+          message: `Gagal memanggil YouTube API (Status ${status}).`
+        }),
         { status: 500, headers: corsHeaders }
       );
     }
@@ -160,7 +204,11 @@ serve(async (req) => {
 
     if (items.length === 0) {
       return new Response(
-        JSON.stringify({ success: false, error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Tidak ditemukan video YouTube untuk "${query}".` }),
+        JSON.stringify({
+          success: false,
+          error: 'NO_MATCH',
+          message: `Video YouTube yang sesuai tidak ditemukan untuk "${query}".`
+        }),
         { status: 200, headers: corsHeaders }
       );
     }
@@ -176,7 +224,11 @@ serve(async (req) => {
     if (!best || best.score < 25 || !best.item?.id?.videoId) {
       console.log(`[YOUTUBE MATCH EDGE FUNCTION] Best candidate score too low (${best?.score || 0}) for "${query}"`);
       return new Response(
-        JSON.stringify({ success: false, error: 'YOUTUBE_MATCH_NOT_FOUND', message: `Video YouTube yang sesuai tidak ditemukan untuk "${query}".` }),
+        JSON.stringify({
+          success: false,
+          error: 'NO_MATCH',
+          message: `Video YouTube yang sesuai tidak ditemukan untuk "${query}".`
+        }),
         { status: 200, headers: corsHeaders }
       );
     }
@@ -185,7 +237,7 @@ serve(async (req) => {
     const videoId = bestItem.id.videoId;
     const videoTitle = decodeHtmlEntities(bestItem.snippet?.title || cleanTitle);
     const channelTitle = decodeHtmlEntities(bestItem.snippet?.channelTitle || cleanArtist);
-    const thumbnail = bestItem.snippet?.thumbnails?.high?.url || bestItem.snippet?.thumbnails?.medium?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    const thumbnailUrl = bestItem.snippet?.thumbnails?.high?.url || bestItem.snippet?.thumbnails?.medium?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
     console.log(`[YOUTUBE MATCH EDGE FUNCTION] Matched videoId: ${videoId} (score: ${best.score}) for "${query}"`);
 
@@ -195,7 +247,7 @@ serve(async (req) => {
         videoId,
         title: videoTitle,
         channelTitle,
-        thumbnail,
+        thumbnailUrl,
         score: best.score
       }),
       { status: 200, headers: corsHeaders }
@@ -204,7 +256,11 @@ serve(async (req) => {
   } catch (err: any) {
     console.error('[YOUTUBE MATCH EDGE FUNCTION] Error:', err.message || err);
     return new Response(
-      JSON.stringify({ success: false, error: 'INTERNAL_ERROR', message: err.message || 'Terjadi kesalahan internal.' }),
+      JSON.stringify({
+        success: false,
+        error: 'INTERNAL_ERROR',
+        message: err.message || 'Terjadi kesalahan internal pada Edge Function.'
+      }),
       { status: 500, headers: corsHeaders }
     );
   }
