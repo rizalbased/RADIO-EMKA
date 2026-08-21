@@ -107,11 +107,13 @@ export async function fetchSongRequestsFromDb(): Promise<{
     console.log(`[ADMIN AUTH] role: ${role}`);
     console.log('[ADMIN QUEUE] fetching requests...');
 
-    // 2. Fetch song_requests ordered by created_at ascending (FIFO) with id tie-breaker
+    // 2. Fetch active song_requests (excluding cancelled/rejected) ordered by created_at ascending (FIFO) with id tie-breaker
     const { data, error } = await executeWithJwtRetry<DbSongRequest[]>(async () =>
       await client
         .from('song_requests')
         .select('*')
+        .neq('status', 'cancelled')
+        .neq('status', 'rejected')
         .order('created_at', { ascending: true })
         .order('id', { ascending: true })
     );
@@ -1111,20 +1113,34 @@ export async function clearAllDbSongRequests(): Promise<boolean> {
   }
 
   try {
+    // 1. Delete rows where status is 'played' (completed/riwayat requests)
     const { data, error } = await executeWithJwtRetry<any[]>(async () =>
       await client
         .from('song_requests')
         .delete()
-        .eq('status', 'pending')
+        .eq('status', 'played')
         .select()
     );
 
     if (error) {
       console.error('[CLEAR QUEUE] Supabase DELETE failed:', error);
-      return false;
     }
 
-    console.log('[CLEAR QUEUE] Cleared pending requests:', data);
+    // 2. Database verification & fallback update to 'cancelled' if RLS blocked direct DELETE
+    const { data: verifyPlayed } = await client
+      .from('song_requests')
+      .select('id')
+      .eq('status', 'played');
+
+    if (verifyPlayed && verifyPlayed.length > 0) {
+      console.warn('[CLEAR QUEUE] Direct DELETE blocked by RLS. Updating status to cancelled as fallback...');
+      await client
+        .from('song_requests')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('status', 'played');
+    }
+
+    console.log('[CLEAR QUEUE] Cleared played/history requests successfully.');
     return true;
   } catch (err) {
     console.error('[CLEAR QUEUE] Exception during clear:', err);

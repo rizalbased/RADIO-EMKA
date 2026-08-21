@@ -63,6 +63,8 @@ export function mapDbRequestToSongRequest(db: DbSongRequest): SongRequest {
   if (db.status === 'playing') uiStatus = 'Playing';
   else if (db.status === 'played') uiStatus = 'Played';
   else if (db.status === 'pending' || (db.status as any) === 'queued') uiStatus = 'Queued';
+  else if (db.status === 'cancelled') uiStatus = 'cancelled';
+  else if (db.status === 'rejected') uiStatus = 'rejected';
 
   return {
     id: db.id,

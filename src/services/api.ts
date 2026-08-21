@@ -776,9 +776,11 @@ export async function clearAllSongRequests(): Promise<{ success: boolean; reques
     await clearAllDbSongRequests();
   }
 
-  saveLocalRequests([]);
+  // Filter out 'Played' (history) requests from local cache and in-memory state
+  const remaining = getLocalRequests().filter(r => r.status !== 'Played');
+  saveLocalRequests(remaining);
   window.dispatchEvent(new Event('storage'));
-  return { success: true, requests: [] };
+  return { success: true, requests: remaining };
 }
 
 // -------------------------------------------------------------
