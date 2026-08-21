@@ -724,12 +724,12 @@ export async function insertSongRequest(data: {
       return { success: false, error: 'Request gagal: Sesi pengguna Supabase tidak valid.' };
     }
 
-    // 5. Pre-check duplicate validation against 'pending' and 'playing'
+    // 5. Pre-check duplicate validation against active 'pending' queue
     try {
       let query = client
         .from('song_requests')
         .select('id, video_id, title, channel_title, status')
-        .in('status', ['pending', 'playing']);
+        .eq('status', 'pending');
 
       if (cleanVideoId) {
         query = query.or(`video_id.eq.${cleanVideoId},and(title.ilike.${normTitle},channel_title.ilike.${normArtist})`);
@@ -739,8 +739,7 @@ export async function insertSongRequest(data: {
 
       const { data: existingRows } = await query;
       if (existingRows && existingRows.length > 0) {
-        const isPlaying = existingRows.some(r => r.status === 'playing');
-        const errorMsg = isPlaying ? 'Lagu sedang diputar.' : 'Lagu tersebut sudah ada di antrean.';
+        const errorMsg = 'Lagu tersebut sudah ada di antrean.';
         console.warn(`[EMKA REQUEST] Duplicate rejected: ${errorMsg}`);
         return { success: false, error: errorMsg };
       }

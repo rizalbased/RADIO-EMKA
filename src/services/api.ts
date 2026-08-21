@@ -580,7 +580,7 @@ export async function findYouTubeMatch(title: string, artist: string): Promise<s
       if (httpStatus === 429 || errorMsg.includes('429') || errorMsg.includes('quotaExceeded')) {
         throw new Error('Kuota YouTube API habis.');
       }
-      if (errorName === 'FunctionsFetchError' || errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError')) {
+      if (errorName === 'FunctionsFetchError' || errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('Failed to send a request')) {
         // Attempt direct call with explicit apikey/Authorization headers as fallback
         if (supabaseUrl && supabaseAnonKey) {
           try {
@@ -608,7 +608,8 @@ export async function findYouTubeMatch(title: string, artist: string): Promise<s
             if (directErr.message?.includes('tidak ditemukan')) throw directErr;
           }
         }
-        throw new Error('Server pencocok YouTube tidak dapat dihubungi (CORS / Network Error).');
+        console.warn('[YOUTUBE MATCH] Network/CORS block to Supabase Edge Function. Falling back to Express backend proxy...');
+        return await fallbackToExpressBackend(cleanTitle, cleanArtist, searchQuery);
       }
 
       throw new Error(`Terjadi kesalahan pada Edge Function (Status ${httpStatus || '500'}).`);
