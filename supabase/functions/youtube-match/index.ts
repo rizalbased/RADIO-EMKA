@@ -248,6 +248,7 @@ serve(async (req: Request) => {
         title: videoTitle,
         channelTitle,
         thumbnailUrl,
+        matchScore: best.score,
         score: best.score
       }),
       { status: 200, headers: corsHeaders }

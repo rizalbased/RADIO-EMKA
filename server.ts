@@ -1128,7 +1128,7 @@ function scoreYouTubeCandidate(item: any, cleanTitle: string, cleanArtist: strin
 }
 
 // Official YouTube Data API v3 Video Search for Track Matching ONLY
-async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawArtist: string = ''): Promise<{ videoId: string | null; items: any[]; success: boolean; error?: string; message?: string }> {
+async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawArtist: string = ''): Promise<{ videoId: string | null; items: any[]; success: boolean; title?: string; channelTitle?: string; thumbnailUrl?: string; matchScore?: number; score?: number; error?: string; message?: string }> {
   const apiKey = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
   const cleanT = serverNormalizeText(rawTitle);
   const cleanA = serverNormalizeText(rawArtist);
@@ -1158,7 +1158,16 @@ async function searchYouTubeOfficial(query: string, rawTitle: string = '', rawAr
           // Strict verification: Require at least score 35 (valid title/artist match)
           if (best && best.score >= 35) {
             console.log(`[YOUTUBE MATCH] query: "${cleanQ}", videoId: ${best.item.videoId}, matchedTitle: "${best.item.title}", matchedArtist: "${best.item.artist}"`);
-            return { success: true, videoId: best.item.videoId, items: scored.map(s => s.item) };
+            return {
+              success: true,
+              videoId: best.item.videoId,
+              title: best.item.title,
+              channelTitle: best.item.channelTitle,
+              thumbnailUrl: best.item.thumbnail,
+              matchScore: best.score,
+              score: best.score,
+              items: scored.map(s => s.item)
+            };
           }
         }
         console.warn(`[YOUTUBE MATCH] No sufficient title/artist match found for: "${cleanQ}"`);

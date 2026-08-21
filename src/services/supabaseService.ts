@@ -578,7 +578,7 @@ export function subscribeToSongRequests(callbacks: {
           console.log('[REALTIME REQUEST] QUEUE SYNC count =', requests?.length);
           callbacks.onSyncAll?.(requests);
         } catch (e) {
-          console.error('[REALTIME REQUEST] Error refreshing queue after event:', e);
+          console.warn('[REALTIME REQUEST] Refresh queue alert:', e);
         }
       }
     )
@@ -590,7 +590,7 @@ export function subscribeToSongRequests(callbacks: {
         });
       }
       if (err) {
-        console.error('[REALTIME REQUEST] Error:', err);
+        console.warn('[REALTIME REQUEST] Subscription warning:', err);
       }
     });
 
@@ -624,7 +624,7 @@ export function subscribeToSongRequests(callbacks: {
         });
       }
       if (err) {
-        console.error('[RADIO STATE] Realtime error:', err);
+        console.warn('[RADIO STATE] Realtime subscription warning:', err);
       }
     });
 
@@ -825,7 +825,7 @@ export async function insertSongRequest(data: {
       return { success: false, error: 'Request gagal dikirim ke server.' };
     }
 
-    console.log(`[REQUEST INSERT SUCCESS] ID: ${inserted.id}`);
+    console.log(`[SONG REQUEST CREATED]\nid: ${inserted.id}\ntitle: "${normTitle}"\nartist: "${normArtist}"\nvideoId: "${cleanVideoId}"\nrequester: "${data.studentName.trim()}"`);
 
     // Step 5: Database Verification - Immediately SELECT back
     const { data: verified, error: verifyErr } = await client
