@@ -43,16 +43,39 @@ async function executeWithJwtRetry<T = any>(
        err.message.includes('invalid JWT') ||
        err.message.includes('JWT expired'))))
   ) {
-    console.warn('[SUPABASE JWT RECOVERY] Detected PGRST303 (JWT issued at future). Clearing invalid session token and retrying query...');
+    console.warn('[SUPABASE AUTH]\nsession invalid');
     const client = getSupabaseClient();
     if (client) {
       try {
-        await client.auth.signOut();
-      } catch (signOutErr) {
-        console.warn('[SUPABASE JWT RECOVERY] signOut warning:', signOutErr);
+        const { data: sessionData } = await client.auth.getSession();
+        if (sessionData?.session) {
+          console.log('[SUPABASE AUTH]\nsession detected');
+          console.log('[SUPABASE AUTH]\nattempting session refresh...');
+          const { data: refreshData, error: refreshError } = await client.auth.refreshSession();
+          if (!refreshError && refreshData?.session) {
+            console.log('[SUPABASE AUTH]\nsession refreshed');
+          } else {
+            console.warn('[SUPABASE AUTH] session refresh failed:', refreshError?.message);
+            console.log('[SUPABASE AUTH]\nsession cleared');
+            await client.auth.signOut();
+            await ensureAnonymousSession();
+          }
+        } else {
+          console.log('[SUPABASE AUTH]\nsession cleared');
+          await client.auth.signOut();
+          await ensureAnonymousSession();
+        }
+      } catch (authRecoveryErr) {
+        console.warn('[SUPABASE AUTH] recovery error, falling back to sign out:', authRecoveryErr);
+        try {
+          console.log('[SUPABASE AUTH]\nsession cleared');
+          await client.auth.signOut();
+          await ensureAnonymousSession();
+        } catch {}
       }
     }
-    // Retry query after clearing invalid session token
+
+    console.log('[SUPABASE AUTH]\nretry query');
     result = await operation();
   }
 

@@ -109,6 +109,9 @@ export async function ensureAnonymousSession(): Promise<string | null> {
     try {
       // 1. Check existing session
       const { data: sessionData } = await client.auth.getSession();
+      if (sessionData?.session) {
+        console.log('[SUPABASE AUTH]\nsession detected');
+      }
       if (!sessionData?.session) {
         if (typeof client.auth.signInAnonymously === 'function') {
           await client.auth.signInAnonymously();
@@ -121,7 +124,8 @@ export async function ensureAnonymousSession(): Promise<string | null> {
       let { data: userData, error: userErr } = await client.auth.getUser();
 
       if (userErr && (userErr.code === 'PGRST303' || userErr.message?.includes('JWT issued at future'))) {
-        console.warn('[EMKA AUTH] Detected PGRST303 clock skew on getUser. Clearing session...');
+        console.warn('[SUPABASE AUTH]\nsession invalid');
+        console.log('[SUPABASE AUTH]\nsession cleared');
         try {
           await client.auth.signOut();
           if (typeof client.auth.signInAnonymously === 'function') {

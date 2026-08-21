@@ -511,94 +511,107 @@ export async function findYouTubeMatch(title: string, artist: string): Promise<s
     throw new Error('Judul dan artis lagu harus diisi.');
   }
 
-  // Determine the endpoint URL. Use direct Supabase Edge Function if supabaseUrl is configured.
-  let targetUrl = '/functions/v1/youtube-match';
-  const isDirectSupabase = Boolean(supabaseUrl);
-  if (isDirectSupabase) {
-    targetUrl = `${supabaseUrl}/functions/v1/youtube-match`;
-  }
+  const client = getSupabaseClient();
+  if (client) {
+    try {
+      console.log(`[YOUTUBE MATCH] Invoking Edge Function "youtube-match" via Supabase Client SDK...`);
+      const { data: edgeData, error: invokeError } = await client.functions.invoke('youtube-match', {
+        method: 'POST',
+        body: { title: cleanTitle, artist: cleanArtist, trackName: cleanTitle, artistName: cleanArtist }
+      });
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (supabaseAnonKey) {
-    headers['apikey'] = supabaseAnonKey;
-    headers['Authorization'] = `Bearer ${supabaseAnonKey}`;
-  }
+      if (invokeError) {
+        console.error('[YOUTUBE MATCH] Supabase Edge Function invoke returned error:', invokeError);
+        const status = (invokeError as any).status || 500;
+        const msg = invokeError.message || '';
 
+        if (status === 401 || status === 403) {
+          throw new Error('Gagal mencocokkan lagu: Kunci API Supabase / YouTube tidak valid (Authentication Error).');
+        } else if (status === 404) {
+          throw new Error('Layanan pencocok video (Edge Function "youtube-match") tidak ditemukan. Silakan pastikan fungsi sudah dideploy ke Supabase.');
+        } else if (status === 429 || msg.includes('quotaExceeded') || msg.includes('Quota')) {
+          throw new Error('Kuota pencarian YouTube API pada server sedang habis. Silakan coba link YouTube secara langsung.');
+        } else {
+          // Fallback to Express backend if possible, instead of immediately throwing
+          console.warn('[YOUTUBE MATCH] Edge Function failed. Attempting fallback to Express backend...');
+          return await fallbackToExpressBackend(cleanTitle, cleanArtist, searchQuery);
+        }
+      }
+
+      if (edgeData) {
+        if (edgeData.success && edgeData.videoId && typeof edgeData.videoId === 'string' && edgeData.videoId.trim().length === 11) {
+          const vid = edgeData.videoId.trim();
+          console.log(`[YOUTUBE MATCH SUCCESS] query: "${searchQuery}", videoId: ${vid}`);
+          return vid;
+        } else if (edgeData.error === 'YOUTUBE_QUOTA_EXCEEDED') {
+          throw new Error(edgeData.message || 'Kuota pencarian YouTube API pada server sedang habis.');
+        } else if (edgeData.error === 'YOUTUBE_AUTH_ERROR') {
+          throw new Error(edgeData.message || 'Secret YOUTUBE_API_KEY di Supabase Edge Function tidak valid.');
+        } else if (edgeData.error === 'YOUTUBE_MATCH_NOT_FOUND') {
+          throw new Error(edgeData.message || 'Video YouTube yang sesuai tidak ditemukan.');
+        } else {
+          throw new Error(edgeData.message || 'Respons server tidak valid saat mencocokkan video.');
+        }
+      } else {
+        throw new Error('Server mengembalikan respons kosong.');
+      }
+    } catch (err: any) {
+      // If it is one of our specific clean messages, throw it
+      if (err?.message && (
+        err.message.includes('belum dapat dicocokkan') ||
+        err.message.includes('tidak ditemukan') ||
+        err.message.includes('Kuota') ||
+        err.message.includes('Kunci API') ||
+        err.message.includes('Tidak diizinkan') ||
+        err.message.includes('Layanan pencocok') ||
+        err.message.includes('terkonfigurasi') ||
+        err.message.includes('Gagal mencocokkan') ||
+        err.message.includes('tidak valid')
+      )) {
+        throw err;
+      }
+      // Otherwise try Express fallback
+      console.warn('[YOUTUBE MATCH] Edge Function exception. Attempting fallback to Express backend...', err);
+      return await fallbackToExpressBackend(cleanTitle, cleanArtist, searchQuery);
+    }
+  } else {
+    // No Supabase configured, call relative path directly
+    console.log('[YOUTUBE MATCH] Supabase client not configured. Directing to Express backend...');
+    return await fallbackToExpressBackend(cleanTitle, cleanArtist, searchQuery);
+  }
+}
+
+async function fallbackToExpressBackend(cleanTitle: string, cleanArtist: string, searchQuery: string): Promise<string> {
   try {
-    console.log(`[YOUTUBE MATCH] Fetching matching service at: ${targetUrl}`);
-    let edgeRes = await fetch(targetUrl, {
+    const edgeRes = await fetch('/functions/v1/youtube-match', {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: cleanTitle, artist: cleanArtist, trackName: cleanTitle, artistName: cleanArtist })
     });
-
-    // If direct absolute fetch failed (e.g. network/CORS error or 404 in direct project),
-    // and we attempted a direct Supabase URL, try fallback to the relative backend endpoint
-    if (!edgeRes.ok && isDirectSupabase) {
-      console.warn(`[YOUTUBE MATCH] Direct Supabase fetch returned status ${edgeRes.status}. Retrying via relative backend path...`);
-      try {
-        edgeRes = await fetch('/functions/v1/youtube-match', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: cleanTitle, artist: cleanArtist, trackName: cleanTitle, artistName: cleanArtist })
-        });
-      } catch (fallbackErr) {
-        console.warn('[YOUTUBE MATCH] Relative fallback also failed:', fallbackErr);
-      }
-    }
 
     if (edgeRes.ok) {
       const edgeData = await edgeRes.json();
       if (edgeData.success && edgeData.videoId && typeof edgeData.videoId === 'string' && edgeData.videoId.trim().length === 11) {
-        const vid = edgeData.videoId.trim();
-        console.log(`[YOUTUBE MATCH] query: "${searchQuery}", videoId: ${vid}, matchedTitle: "${cleanTitle}", matchedArtist: "${cleanArtist}"`);
-        return vid;
+        return edgeData.videoId.trim();
       } else if (edgeData.error === 'YOUTUBE_QUOTA_EXCEEDED') {
-        console.warn(`[YOUTUBE MATCH] Quota exceeded on server for "${searchQuery}"`);
-        throw new Error(edgeData.message || 'Kuota pencarian YouTube API pada server sedang habis.');
+        throw new Error('Kuota pencarian YouTube API pada server sedang habis.');
       } else if (edgeData.error === 'YOUTUBE_AUTH_ERROR') {
-        console.warn(`[YOUTUBE MATCH] Auth error on YouTube API for "${searchQuery}"`);
-        throw new Error(edgeData.message || 'Secret YOUTUBE_API_KEY di Supabase Edge Function tidak valid.');
-      } else if (edgeData.error === 'YOUTUBE_MATCH_NOT_FOUND') {
-        console.warn(`[YOUTUBE MATCH] Video YouTube yang sesuai tidak ditemukan untuk "${searchQuery}"`);
-        throw new Error(edgeData.message || 'Video YouTube yang sesuai tidak ditemukan.');
+        throw new Error('Secret YOUTUBE_API_KEY di Supabase Edge Function tidak valid.');
       } else {
-        throw new Error('Respons server tidak valid saat mencocokkan video.');
+        throw new Error('Video YouTube yang sesuai tidak ditemukan.');
       }
     } else {
       const status = edgeRes.status;
-      const text = await edgeRes.text().catch(() => '');
-      console.error(`[YOUTUBE MATCH] Server returned HTTP ${status}: ${text}`);
-
-      if (status === 401 || status === 403) {
-        if (text.includes('keyInvalid') || text.includes('JWT') || text.includes('apiKey') || text.includes('Invalid API key')) {
-          throw new Error('Gagal mencocokkan lagu: Kunci API Supabase / YouTube tidak valid (Authentication Error).');
-        }
-        throw new Error('Gagal mencocokkan lagu: Tidak diizinkan mengakses pencocokan video (Forbidden/Unauthorized).');
-      } else if (status === 429 || text.includes('quotaExceeded') || text.includes('Quota')) {
-        throw new Error('Kuota pencarian YouTube API pada server sedang habis. Silakan coba link YouTube secara langsung.');
-      } else if (status === 404) {
-        throw new Error('Layanan pencocok video (Edge Function) tidak ditemukan di server/Supabase. Silakan pastikan fungsi sudah dideploy.');
+      if (status === 404) {
+        throw new Error('Layanan pencocok video tidak ditemukan di server (HTTP 404).');
       } else {
-        throw new Error(`Gagal mencocokkan lagu: Server Edge Function mengembalikan error (HTTP ${status}).`);
+        throw new Error(`Gagal menghubungi server pencocok video (HTTP ${status}).`);
       }
     }
   } catch (err: any) {
-    if (err?.message && (
-      err.message.includes('belum dapat dicocokkan') ||
-      err.message.includes('tidak ditemukan') ||
-      err.message.includes('Kuota') ||
-      err.message.includes('Kunci API') ||
-      err.message.includes('Tidak diizinkan') ||
-      err.message.includes('Layanan pencocok') ||
-      err.message.includes('mengembalikan error') ||
-      err.message.includes('tidak valid')
-    )) {
+    if (err?.message && (err.message.includes('Kuota') || err.message.includes('tidak ditemukan') || err.message.includes('tidak valid') || err.message.includes('Layanan pencocok'))) {
       throw err;
     }
-    console.error('[YOUTUBE MATCH] Request failure:', err?.message || err);
     throw new Error('Gagal menghubungi server pencocok video YouTube (Edge Function Error / Offline).');
   }
 }
