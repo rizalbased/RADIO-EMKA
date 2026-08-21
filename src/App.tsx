@@ -411,9 +411,9 @@ export default function App() {
             onAdminLoginSuccess={handleAdminLoginSuccess}
           />
         ) : (
-          <div className="min-h-screen bg-primary text-primary font-sans flex flex-col md:flex-row transition-colors duration-250">
+          <div className="h-screen bg-primary text-primary font-sans flex flex-col md:flex-row transition-colors duration-250 overflow-hidden">
             {/* DESKTOP SIDEBAR (COLUMN 1) */}
-            <div className="hidden md:block">
+            <div className="hidden md:block flex-shrink-0 h-screen">
               <Sidebar
                 activeTab={activeTab}
                 setActiveTab={setActiveTab}
@@ -424,7 +424,7 @@ export default function App() {
             </div>
 
             {/* MOBILE TOP BAR */}
-            <div className="md:hidden bg-card border-b border-subtle p-4 flex items-center justify-between sticky top-0 z-30">
+            <div className="md:hidden bg-card border-b border-subtle p-4 flex items-center justify-between flex-shrink-0 z-30">
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
@@ -467,20 +467,22 @@ export default function App() {
             )}
 
           {/* MAIN CONTENT AREA */}
-          <div className="flex-1 flex flex-col min-w-0 pb-24 md:pb-8">
+          <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
             {/* TOP HEADER */}
-            <TopHeader
-              radioHost={radioHosts[0]}
-              radioHosts={radioHosts}
-              onOpenSheetModal={() => setIsSheetModalOpen(true)}
-              onOpenShareModal={() => setIsShareModalOpen(true)}
-              sheetConfig={sheetConfig}
-              isSyncing={isSyncing}
-              onRefresh={handleManualRefresh}
-              userRole={userRole}
-            />
+            <div className="flex-shrink-0 z-20">
+              <TopHeader
+                radioHost={radioHosts[0]}
+                radioHosts={radioHosts}
+                onOpenSheetModal={() => setIsSheetModalOpen(true)}
+                onOpenShareModal={() => setIsShareModalOpen(true)}
+                sheetConfig={sheetConfig}
+                isSyncing={isSyncing}
+                onRefresh={handleManualRefresh}
+                userRole={userRole}
+              />
+            </div>
 
-            <main className="p-4 sm:p-6 lg:p-8 flex-1">
+            <main className="p-4 sm:p-6 lg:p-8 flex-1 overflow-y-auto min-h-0 pb-24 md:pb-8">
               {/* 1. DEDICATED RADIO PLAYER (3-COLUMN LAYOUT: Radio Player + Queue Panel) */}
               <div className={activeTab === 'player' ? 'grid grid-cols-1 xl:grid-cols-12 gap-6 items-start' : 'hidden'}>
                 {/* Center Column: Big Radio Player */}

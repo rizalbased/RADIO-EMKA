@@ -47,7 +47,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   };
 
   return (
-    <header className="h-16 px-5 sm:px-8 bg-card border-b border-subtle flex items-center justify-between sticky top-0 z-20 transition-colors">
+    <header className="h-16 px-5 sm:px-8 bg-card border-b border-subtle flex items-center justify-between sticky top-0 z-20 transition-colors flex-shrink-0">
       {/* Left: Station & Broadcast Status */}
       <div className="flex items-center space-x-3 sm:space-x-4">
         {/* On Air Pill */}
