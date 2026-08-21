@@ -34,7 +34,7 @@ const MOOD_OPTIONS: MoodTag[] = [
   '☕ Chill Afternoon'
 ];
 
-const QUICK_CLASSES = ['X IPA 1', 'X IPS 2', 'XI MIPA 3', 'XI IPS 1', 'XII DKV', 'XII IPS 4'];
+const QUICK_CLASSES = ['XII DKV 1', 'X DKV 1', 'X TKJ 2', 'X MP', 'XII AKT'];
 const QUICK_TARGETS = ['Crush di Kantin 💘', 'Sahabat Terbaik 💖', 'Wali Kelas 🧑‍🏫', 'Geng Nongkrong 🔥', 'Anonim 🕵️'];
 
 export const SongRequestForm: React.FC<SongRequestFormProps> = ({
@@ -335,7 +335,7 @@ export const SongRequestForm: React.FC<SongRequestFormProps> = ({
               </label>
               <input
                 type="text"
-                placeholder="Contoh: XI MIPA 2"
+                placeholder="Contoh: XII DKV 1"
                 value={className}
                 onChange={(e) => setClassName(e.target.value)}
                 className="w-full bg-elevated border border-subtle focus:border-primary focus:bg-card rounded-2xl px-4 py-3.5 text-sm font-semibold text-primary placeholder:text-secondary/50 focus:outline-none transition"
