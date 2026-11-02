@@ -126,6 +126,8 @@ interface RadioEngineContextProps {
   toggleRepeat: () => void;
   togglePlayPause: () => Promise<void>;
   handleStopRadio: () => Promise<void>;
+  pauseForAdzan: () => boolean;
+  resumeAfterAdzan: () => void;
   toggleMute: () => void;
   startRadioPlayback: () => Promise<void>;
   handleSeekChange: (val: number) => void;
@@ -769,6 +771,33 @@ export const RadioEngineProvider: React.FC<{
     }
   };
 
+  const pauseForAdzan = useCallback((): boolean => {
+    const isPlaying = ytPlayerStateRef.current === 1;
+    console.log('[ADZAN HOOK] pauseForAdzan called. Radio was playing:', isPlaying);
+    if (isPlaying && playerControllerRef.current) {
+      try {
+        playerControllerRef.current.pause();
+        setYtPlayerState(2);
+      } catch (err) {
+        console.warn('[ADZAN HOOK] Error pausing player for Adzan:', err);
+      }
+    }
+    return isPlaying;
+  }, []);
+
+  const resumeAfterAdzan = useCallback(() => {
+    console.log('[ADZAN HOOK] resumeAfterAdzan called. Resuming radio player...');
+    if (playerControllerRef.current) {
+      try {
+        playerControllerRef.current.play();
+        setYtPlayerState(1);
+        setIsAutoplayBlocked(false);
+      } catch (err) {
+        console.warn('[ADZAN HOOK] Error resuming player after Adzan:', err);
+      }
+    }
+  }, []);
+
   const startRadioPlayback = async () => {
     await togglePlayPause();
   };
@@ -897,6 +926,8 @@ export const RadioEngineProvider: React.FC<{
       toggleRepeat,
       togglePlayPause,
       handleStopRadio,
+      pauseForAdzan,
+      resumeAfterAdzan,
       toggleMute,
       startRadioPlayback,
       handleSeekChange,

@@ -9,7 +9,8 @@ import {
   RefreshCw,
   Share2,
   FileSpreadsheet,
-  Monitor
+  Monitor,
+  Clock
 } from 'lucide-react';
 import { RadioHost, SheetConfig } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
@@ -24,6 +25,7 @@ interface TopHeaderProps {
   isSyncing: boolean;
   onRefresh: () => void;
   userRole: 'user' | 'admin';
+  onOpenAdzanSettings?: () => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
@@ -34,7 +36,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   sheetConfig,
   isSyncing,
   onRefresh,
-  userRole
+  userRole,
+  onOpenAdzanSettings
 }) => {
   const { theme, toggleTheme } = useTheme();
   const { ytPlayerState } = useRadioEngine();
@@ -106,6 +109,16 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span className="hidden lg:inline">{sheetConfig.connected ? 'Sheet Terhubung' : 'Sambung Sheet'}</span>
+            </button>
+          )}
+          {userRole === 'admin' && onOpenAdzanSettings && (
+            <button
+              onClick={onOpenAdzanSettings}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 border bg-elevated text-secondary border-subtle hover:bg-secondary hover:text-primary"
+              title="Pengaturan Siaran Adzan Kota Medan"
+            >
+              <Clock className="w-3.5 h-3.5 text-[#B6FF00]" />
+              <span className="hidden xl:inline">Adzan Medan</span>
             </button>
           )}
         </div>

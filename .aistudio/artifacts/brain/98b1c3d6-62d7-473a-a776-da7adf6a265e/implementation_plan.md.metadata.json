@@ -1,0 +1,6 @@
+{
+  "summary":  "Rencana arsitektur dan implementasi fitur Notifikasi Adzan Otomatis berbasis lokasi Kota Medan pada EMKA RADIO, mencakup integrasi Supabase Database & Storage, scheduler presisi detik, sinkronisasi jeda/lanjut radio player, banner waktu sholat modern, dan panel pengaturan admin.",
+  "updatedAt":  "2026-11-02T06:53:04.095449723Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

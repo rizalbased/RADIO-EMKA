@@ -18,6 +18,9 @@ import { StoryShareModal } from './components/StoryShareModal';
 import { GlobalYouTubePlayer } from './components/GlobalYouTubePlayer';
 import { MiniPlayer } from './components/MiniPlayer';
 import { AccessLandingView } from './components/AccessLandingView';
+import { AdzanBanner } from './components/AdzanBanner';
+import { AdzanSettingsModal } from './components/AdzanSettingsModal';
+import { useAdzanScheduler } from './hooks/useAdzanScheduler';
 
 import { SongRequest, SheetConfig, RadioHost, DbRadioState } from './types';
 import { ensureAnonymousSession, getAdminSessionStatus, printEmkaDiagnostic } from './lib/supabaseClient';
@@ -404,298 +407,432 @@ export default function App() {
         userRole={userRole}
       >
         <GlobalYouTubePlayer />
-
-        {!isAccessChosen ? (
-          <AccessLandingView
-            onSelectStudent={handleSelectStudent}
-            onAdminLoginSuccess={handleAdminLoginSuccess}
-          />
-        ) : (
-          <div className="h-screen bg-primary text-primary font-sans flex flex-col md:flex-row transition-colors duration-250 overflow-hidden">
-            {/* DESKTOP SIDEBAR (COLUMN 1) */}
-            <div className="hidden md:block flex-shrink-0 h-screen">
-              <Sidebar
-                activeTab={activeTab}
-                setActiveTab={setActiveTab}
-                userRole={userRole}
-                onLogout={handleLogoutOrSwitchRole}
-                requests={requests}
-              />
-            </div>
-
-            {/* MOBILE TOP BAR */}
-            <div className="md:hidden bg-card border-b border-subtle p-4 flex items-center justify-between flex-shrink-0 z-30">
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                  className="p-2 rounded-xl bg-elevated border border-subtle text-primary"
-                >
-                  {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-                </button>
-                <div className="flex items-center space-x-1 font-display font-black text-xl">
-                  <span className="text-primary">EMKA</span>
-                  <span className="text-[#FF4F91]">RADIO</span>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span className="px-2.5 py-0.5 rounded-full bg-[#B6FF00] text-black text-[10px] font-black uppercase tracking-wider font-display">
-                  ● LIVE
-                </span>
-              </div>
-            </div>
-
-            {/* MOBILE DRAWER / MENU */}
-            {isMobileSidebarOpen && (
-              <div className="fixed inset-0 z-40 bg-black/60 md:hidden flex" onClick={() => setIsMobileSidebarOpen(false)}>
-                <div className="w-72 bg-card h-full" onClick={(e) => e.stopPropagation()}>
-                  <Sidebar
-                    activeTab={activeTab}
-                    setActiveTab={(t) => {
-                      setActiveTab(t);
-                      setIsMobileSidebarOpen(false);
-                    }}
-                    userRole={userRole}
-                    onLogout={() => {
-                      setIsMobileSidebarOpen(false);
-                      handleLogoutOrSwitchRole();
-                    }}
-                    requests={requests}
-                  />
-                </div>
-              </div>
-            )}
-
-          {/* MAIN CONTENT AREA */}
-          <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-            {/* TOP HEADER */}
-            <div className="flex-shrink-0 z-20">
-              <TopHeader
-                radioHost={radioHosts[0]}
-                radioHosts={radioHosts}
-                onOpenSheetModal={() => setIsSheetModalOpen(true)}
-                onOpenShareModal={() => setIsShareModalOpen(true)}
-                sheetConfig={sheetConfig}
-                isSyncing={isSyncing}
-                onRefresh={handleManualRefresh}
-                userRole={userRole}
-              />
-            </div>
-
-            <main className="p-4 sm:p-6 lg:p-8 flex-1 overflow-y-auto min-h-0 pb-24 md:pb-8">
-              {/* 1. DEDICATED RADIO PLAYER (3-COLUMN LAYOUT: Radio Player + Queue Panel) */}
-              <div className={activeTab === 'player' ? 'grid grid-cols-1 xl:grid-cols-12 gap-6 items-start' : 'hidden'}>
-                {/* Center Column: Big Radio Player */}
-                <div className="xl:col-span-8">
-                  <RadioPlayerView
-                    requests={requests}
-                    onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                    onLike={handleLikeRequest}
-                  />
-                </div>
-
-                {/* Right Column: Antrean FIFO Queue */}
-                <div className="xl:col-span-4">
-                  <QueuePanel
-                    requests={requests}
-                    onUpdateStatus={handleUpdateStatus}
-                    onDeleteRequest={handleDeleteRequest}
-                    onClearAllRequests={handleClearAllRequests}
-                    onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                  />
-                </div>
-              </div>
-
-              {/* 2. SETTING PENYIAR */}
-              {activeTab === 'dj' && (
-                <DjStudio
-                  requests={requests}
-                  onUpdateStatus={handleUpdateStatus}
-                  onDeleteRequest={handleDeleteRequest}
-                  onClearAllRequests={handleClearAllRequests}
-                  sheetConfig={sheetConfig}
-                  onRefresh={handleManualRefresh}
-                  isSyncing={isSyncing}
-                  onOpenShareModal={() => setIsShareModalOpen(true)}
-                  radioHost={radioHosts[0]}
-                  radioHosts={radioHosts}
-                  onUpdateRadioHost={(host) => handleUpdateHostsData([host, radioHosts[1]])}
-                  onUpdateRadioHosts={handleUpdateHostsData}
-                  onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                  onUpdateYoutubeVideoId={handleUpdateYoutubeVideoId}
-                  onGoToPlayerTab={() => setActiveTab('player')}
-                />
-              )}
-
-              {/* 3. REQUEST LAGU */}
-              {activeTab === 'request' && (
-                <div className="max-w-3xl mx-auto">
-                  <SongRequestForm
-                    onSubmitRequest={handleSubmitRequest}
-                    isSubmitting={isSubmitting}
-                  />
-                </div>
-              )}
-
-              {/* 4. LIVE FEED / DASHBOARD */}
-              {activeTab === 'feed' && (
-                <LiveFeed
-                  requests={requests}
-                  onLikeRequest={handleLikeRequest}
-                  isSyncing={isSyncing}
-                  onRefresh={handleManualRefresh}
-                  sheetConfig={sheetConfig}
-                  onOpenSheetModal={() => setIsSheetModalOpen(true)}
-                  onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                  userRole={userRole}
-                  onDeleteRequest={handleDeleteRequest}
-                  onClearAllRequests={handleClearAllRequests}
-                />
-              )}
-
-              {/* 5. ANTREAN (Dedicated Full Queue View) */}
-              {activeTab === 'queue' && (
-                <div className="max-w-4xl mx-auto">
-                  <QueuePanel
-                    requests={requests}
-                    onUpdateStatus={handleUpdateStatus}
-                    onDeleteRequest={handleDeleteRequest}
-                    onClearAllRequests={handleClearAllRequests}
-                    onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                  />
-                </div>
-              )}
-
-              {/* 6. AI WINGMAN */}
-              {activeTab === 'ai' && <AiWingmanModal />}
-
-              {/* 7. PREVIEW SISWA */}
-              {activeTab === 'preview' && (
-                <div className="max-w-4xl mx-auto space-y-6">
-                  <CurrentlyPlaying
-                    currentTrack={currentlyPlayingTrack}
-                    nextTrack={nextUpTrack}
-                    queuedRequests={queuedRequestsList}
-                    queuedCount={queuedRequestsList.length}
-                    onLike={handleLikeRequest}
-                    onOpenAiWingman={() => setActiveTab('ai')}
-                    radioHost={radioHosts[0]}
-                    radioHosts={radioHosts}
-                    userRole={userRole}
-                    onGoToDjStudio={() => setActiveTab('dj')}
-                    onGoToRequestTab={() => setActiveTab('request')}
-                    onGoToFeedTab={() => setActiveTab('feed')}
-                    onOpenStoryModal={(req) => setStoryModalRequest(req)}
-                  />
-                  <UserLiveRadio />
-                </div>
-              )}
-
-              {/* 8. RIWAYAT */}
-              {activeTab === 'history' && (
-                <HistoryView
-                  requests={requests}
-                  onPlayAgain={async (id) => {
-                    await handleUpdateStatus(id, 'Playing');
-                    setActiveTab('player');
-                  }}
-                />
-              )}
-
-              {/* 9. LAPORAN */}
-              {activeTab === 'reports' && <ReportsView requests={requests} />}
-            </main>
-          </div>
-
-          {/* MOBILE BOTTOM NAVIGATION BAR */}
-          <div className="md:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-subtle px-3 py-2 flex items-center justify-around z-30">
-            <button
-              onClick={() => setActiveTab('feed')}
-              className={`flex flex-col items-center p-1 text-[10px] font-bold ${
-                activeTab === 'feed' ? 'text-[#FF4F91]' : 'text-secondary'
-              }`}
-            >
-              <Home className="w-5 h-5" />
-              <span>Home</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('request')}
-              className={`flex flex-col items-center p-1 text-[10px] font-bold ${
-                activeTab === 'request' ? 'text-[#FF4F91]' : 'text-secondary'
-              }`}
-            >
-              <Music className="w-5 h-5" />
-              <span>Request</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('player')}
-              className={`flex flex-col items-center p-1 text-[10px] font-bold ${
-                activeTab === 'player' ? 'text-[#B6FF00] font-black' : 'text-secondary'
-              }`}
-            >
-              <div className="w-8 h-8 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center -mt-3 shadow-md border border-black">
-                <Headphones className="w-4 h-4" />
-              </div>
-              <span className="mt-0.5">Radio</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('queue')}
-              className={`flex flex-col items-center p-1 text-[10px] font-bold ${
-                activeTab === 'queue' ? 'text-[#FF4F91]' : 'text-secondary'
-              }`}
-            >
-              <ListMusic className="w-5 h-5" />
-              <span>Antrean</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('dj')}
-              className={`flex flex-col items-center p-1 text-[10px] font-bold ${
-                activeTab === 'dj' ? 'text-[#FF4F91]' : 'text-secondary'
-              }`}
-            >
-              <Settings className="w-5 h-5" />
-              <span>Setting</span>
-            </button>
-          </div>
-
-          {/* Persistent Mini Player across tabs */}
-          <MiniPlayer activeTab={activeTab} setActiveTab={setActiveTab} requests={requests} />
-
-          {/* Modals */}
-          <GoogleSheetModal
-            isOpen={isSheetModalOpen}
-            onClose={() => setIsSheetModalOpen(false)}
-            sheetConfig={sheetConfig}
-            onConnectSheet={handleConnectSheet}
-            onRefresh={handleManualRefresh}
-            requests={requests}
-          />
-
-          <ShareRequestLinkModal
-            isOpen={isShareModalOpen}
-            onClose={() => setIsShareModalOpen(false)}
-          />
-
-          <AdminPinModal
-            isOpen={isAdminPinModalOpen}
-            onClose={() => setIsAdminPinModalOpen(false)}
-            onSuccessAdmin={handleAdminLoginSuccess}
-          />
-
-          <StoryShareModal
-            isOpen={!!storyModalRequest}
-            onClose={() => setStoryModalRequest(null)}
-            request={storyModalRequest}
-            radioHost={radioHosts[0]}
-            radioHosts={radioHosts}
-          />
-        </div>
-        )}
+        <MainRadioAppContent
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          userRole={userRole}
+          isAccessChosen={isAccessChosen}
+          requests={requests}
+          radioHosts={radioHosts}
+          sheetConfig={sheetConfig}
+          isSyncing={isSyncing}
+          isSubmitting={isSubmitting}
+          isMobileSidebarOpen={isMobileSidebarOpen}
+          setIsMobileSidebarOpen={setIsMobileSidebarOpen}
+          isSheetModalOpen={isSheetModalOpen}
+          setIsSheetModalOpen={setIsSheetModalOpen}
+          isShareModalOpen={isShareModalOpen}
+          setIsShareModalOpen={setIsShareModalOpen}
+          isAdminPinModalOpen={isAdminPinModalOpen}
+          setIsAdminPinModalOpen={setIsAdminPinModalOpen}
+          storyModalRequest={storyModalRequest}
+          setStoryModalRequest={setStoryModalRequest}
+          handleSelectStudent={handleSelectStudent}
+          handleAdminLoginSuccess={handleAdminLoginSuccess}
+          handleLogoutOrSwitchRole={handleLogoutOrSwitchRole}
+          handleManualRefresh={handleManualRefresh}
+          handleUpdateStatus={handleUpdateStatus}
+          handleDeleteRequest={handleDeleteRequest}
+          handleClearAllRequests={handleClearAllRequests}
+          handleSubmitRequest={handleSubmitRequest}
+          handleLikeRequest={handleLikeRequest}
+          handleUpdateHostsData={handleUpdateHostsData}
+          handleUpdateYoutubeVideoId={handleUpdateYoutubeVideoId}
+          handleConnectSheet={handleConnectSheet}
+          currentlyPlayingTrack={currentlyPlayingTrack}
+          nextUpTrack={nextUpTrack}
+          queuedRequestsList={queuedRequestsList}
+        />
       </RadioEngineProvider>
     </ThemeProvider>
+  );
+}
+
+interface MainRadioAppContentProps {
+  activeTab: MainTabType;
+  setActiveTab: (tab: MainTabType) => void;
+  userRole: 'user' | 'admin';
+  isAccessChosen: boolean;
+  requests: SongRequest[];
+  radioHosts: RadioHost[];
+  sheetConfig: SheetConfig;
+  isSyncing: boolean;
+  isSubmitting: boolean;
+  isMobileSidebarOpen: boolean;
+  setIsMobileSidebarOpen: (open: boolean) => void;
+  isSheetModalOpen: boolean;
+  setIsSheetModalOpen: (open: boolean) => void;
+  isShareModalOpen: boolean;
+  setIsShareModalOpen: (open: boolean) => void;
+  isAdminPinModalOpen: boolean;
+  setIsAdminPinModalOpen: (open: boolean) => void;
+  storyModalRequest: Partial<SongRequest> | null;
+  setStoryModalRequest: (req: Partial<SongRequest> | null) => void;
+  handleSelectStudent: () => void;
+  handleAdminLoginSuccess: () => void;
+  handleLogoutOrSwitchRole: () => void;
+  handleManualRefresh: () => void;
+  handleUpdateStatus: (id: string, status: 'Queued' | 'Playing' | 'Played') => Promise<void>;
+  handleDeleteRequest: (id: string) => Promise<void>;
+  handleClearAllRequests: () => Promise<void>;
+  handleSubmitRequest: (newReq: Omit<SongRequest, 'id' | 'timestamp' | 'likes'>) => Promise<void>;
+  handleLikeRequest: (id: string) => Promise<void>;
+  handleUpdateHostsData: (hosts: RadioHost[]) => Promise<void>;
+  handleUpdateYoutubeVideoId: (id: string, vidId: string) => Promise<void>;
+  handleConnectSheet: (payload: { spreadsheetId?: string; spreadsheetUrl?: string }) => Promise<void>;
+  currentlyPlayingTrack?: SongRequest;
+  nextUpTrack?: SongRequest;
+  queuedRequestsList: SongRequest[];
+}
+
+function MainRadioAppContent(props: MainRadioAppContentProps) {
+  const {
+    activeTab,
+    setActiveTab,
+    userRole,
+    isAccessChosen,
+    requests,
+    radioHosts,
+    sheetConfig,
+    isSyncing,
+    isSubmitting,
+    isMobileSidebarOpen,
+    setIsMobileSidebarOpen,
+    isSheetModalOpen,
+    setIsSheetModalOpen,
+    isShareModalOpen,
+    setIsShareModalOpen,
+    isAdminPinModalOpen,
+    setIsAdminPinModalOpen,
+    storyModalRequest,
+    setStoryModalRequest,
+    handleSelectStudent,
+    handleAdminLoginSuccess,
+    handleLogoutOrSwitchRole,
+    handleManualRefresh,
+    handleUpdateStatus,
+    handleDeleteRequest,
+    handleClearAllRequests,
+    handleSubmitRequest,
+    handleLikeRequest,
+    handleUpdateHostsData,
+    handleUpdateYoutubeVideoId,
+    handleConnectSheet,
+    currentlyPlayingTrack,
+    nextUpTrack,
+    queuedRequestsList
+  } = props;
+
+  const adzanScheduler = useAdzanScheduler();
+  const [isAdzanModalOpen, setIsAdzanModalOpen] = useState<boolean>(false);
+
+  if (!isAccessChosen) {
+    return (
+      <AccessLandingView
+        onSelectStudent={handleSelectStudent}
+        onAdminLoginSuccess={handleAdminLoginSuccess}
+      />
+    );
+  }
+
+  return (
+    <div className="h-screen bg-primary text-primary font-sans flex flex-col md:flex-row transition-colors duration-250 overflow-hidden">
+      {/* DESKTOP SIDEBAR (COLUMN 1) */}
+      <div className="hidden md:block flex-shrink-0 h-screen">
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          userRole={userRole}
+          onLogout={handleLogoutOrSwitchRole}
+          requests={requests}
+        />
+      </div>
+
+      {/* MOBILE TOP BAR */}
+      <div className="md:hidden bg-card border-b border-subtle p-4 flex items-center justify-between flex-shrink-0 z-30">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+            className="p-2 rounded-xl bg-elevated border border-subtle text-primary"
+          >
+            {isMobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+          <div className="flex items-center space-x-1 font-display font-black text-xl">
+            <span className="text-primary">EMKA</span>
+            <span className="text-[#FF4F91]">RADIO</span>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <span className="px-2.5 py-0.5 rounded-full bg-[#B6FF00] text-black text-[10px] font-black uppercase tracking-wider font-display">
+            ● LIVE
+          </span>
+        </div>
+      </div>
+
+      {/* MOBILE DRAWER / MENU */}
+      {isMobileSidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/60 md:hidden flex" onClick={() => setIsMobileSidebarOpen(false)}>
+          <div className="w-72 bg-card h-full" onClick={(e) => e.stopPropagation()}>
+            <Sidebar
+              activeTab={activeTab}
+              setActiveTab={(t) => {
+                setActiveTab(t);
+                setIsMobileSidebarOpen(false);
+              }}
+              userRole={userRole}
+              onLogout={() => {
+                setIsMobileSidebarOpen(false);
+                handleLogoutOrSwitchRole();
+              }}
+              requests={requests}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* MAIN CONTENT AREA */}
+      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
+        {/* TOP HEADER */}
+        <div className="flex-shrink-0 z-20">
+          <TopHeader
+            radioHost={radioHosts[0]}
+            radioHosts={radioHosts}
+            onOpenSheetModal={() => setIsSheetModalOpen(true)}
+            onOpenShareModal={() => setIsShareModalOpen(true)}
+            onOpenAdzanSettings={() => setIsAdzanModalOpen(true)}
+            sheetConfig={sheetConfig}
+            isSyncing={isSyncing}
+            onRefresh={handleManualRefresh}
+            userRole={userRole}
+          />
+        </div>
+
+        <main className="p-4 sm:p-6 lg:p-8 flex-1 overflow-y-auto min-h-0 pb-24 md:pb-8">
+          {/* ADZAN & JADWAL SHOLAT KOTA MEDAN BANNER */}
+          <AdzanBanner
+            scheduler={adzanScheduler}
+            onOpenSettings={() => setIsAdzanModalOpen(true)}
+            userRole={userRole}
+          />
+
+          {/* 1. DEDICATED RADIO PLAYER (3-COLUMN LAYOUT: Radio Player + Queue Panel) */}
+          <div className={activeTab === 'player' ? 'grid grid-cols-1 xl:grid-cols-12 gap-6 items-start' : 'hidden'}>
+            {/* Center Column: Big Radio Player */}
+            <div className="xl:col-span-8">
+              <RadioPlayerView
+                requests={requests}
+                onOpenStoryModal={(req) => setStoryModalRequest(req)}
+                onLike={handleLikeRequest}
+              />
+            </div>
+
+            {/* Right Column: Antrean FIFO Queue */}
+            <div className="xl:col-span-4">
+              <QueuePanel
+                requests={requests}
+                onUpdateStatus={handleUpdateStatus}
+                onDeleteRequest={handleDeleteRequest}
+                onClearAllRequests={handleClearAllRequests}
+                onOpenStoryModal={(req) => setStoryModalRequest(req)}
+              />
+            </div>
+          </div>
+
+          {/* 2. SETTING PENYIAR */}
+          {activeTab === 'dj' && (
+            <DjStudio
+              requests={requests}
+              onUpdateStatus={handleUpdateStatus}
+              onDeleteRequest={handleDeleteRequest}
+              onClearAllRequests={handleClearAllRequests}
+              sheetConfig={sheetConfig}
+              onRefresh={handleManualRefresh}
+              isSyncing={isSyncing}
+              onOpenShareModal={() => setIsShareModalOpen(true)}
+              radioHost={radioHosts[0]}
+              radioHosts={radioHosts}
+              onUpdateRadioHost={(host) => handleUpdateHostsData([host, radioHosts[1]])}
+              onUpdateRadioHosts={handleUpdateHostsData}
+              onOpenStoryModal={(req) => setStoryModalRequest(req)}
+              onUpdateYoutubeVideoId={handleUpdateYoutubeVideoId}
+              onGoToPlayerTab={() => setActiveTab('player')}
+            />
+          )}
+
+          {/* 3. REQUEST LAGU */}
+          {activeTab === 'request' && (
+            <div className="max-w-3xl mx-auto">
+              <SongRequestForm
+                onSubmitRequest={handleSubmitRequest}
+                isSubmitting={isSubmitting}
+              />
+            </div>
+          )}
+
+          {/* 4. LIVE FEED / DASHBOARD */}
+          {activeTab === 'feed' && (
+            <LiveFeed
+              requests={requests}
+              onLikeRequest={handleLikeRequest}
+              isSyncing={isSyncing}
+              onRefresh={handleManualRefresh}
+              sheetConfig={sheetConfig}
+              onOpenSheetModal={() => setIsSheetModalOpen(true)}
+              onOpenStoryModal={(req) => setStoryModalRequest(req)}
+              userRole={userRole}
+              onDeleteRequest={handleDeleteRequest}
+              onClearAllRequests={handleClearAllRequests}
+            />
+          )}
+
+          {/* 5. ANTREAN (Dedicated Full Queue View) */}
+          {activeTab === 'queue' && (
+            <div className="max-w-4xl mx-auto">
+              <QueuePanel
+                requests={requests}
+                onUpdateStatus={handleUpdateStatus}
+                onDeleteRequest={handleDeleteRequest}
+                onClearAllRequests={handleClearAllRequests}
+                onOpenStoryModal={(req) => setStoryModalRequest(req)}
+              />
+            </div>
+          )}
+
+          {/* 6. AI WINGMAN */}
+          {activeTab === 'ai' && <AiWingmanModal />}
+
+          {/* 7. PREVIEW SISWA */}
+          {activeTab === 'preview' && (
+            <div className="max-w-4xl mx-auto space-y-6">
+              <CurrentlyPlaying
+                currentTrack={currentlyPlayingTrack}
+                nextTrack={nextUpTrack}
+                queuedRequests={queuedRequestsList}
+                queuedCount={queuedRequestsList.length}
+                onLike={handleLikeRequest}
+                onOpenAiWingman={() => setActiveTab('ai')}
+                radioHost={radioHosts[0]}
+                radioHosts={radioHosts}
+                userRole={userRole}
+                onGoToDjStudio={() => setActiveTab('dj')}
+                onGoToRequestTab={() => setActiveTab('request')}
+                onGoToFeedTab={() => setActiveTab('feed')}
+                onOpenStoryModal={(req) => setStoryModalRequest(req)}
+              />
+              <UserLiveRadio />
+            </div>
+          )}
+
+          {/* 8. RIWAYAT */}
+          {activeTab === 'history' && (
+            <HistoryView
+              requests={requests}
+              onPlayAgain={async (id) => {
+                await handleUpdateStatus(id, 'Playing');
+                setActiveTab('player');
+              }}
+            />
+          )}
+
+          {/* 9. LAPORAN */}
+          {activeTab === 'reports' && <ReportsView requests={requests} />}
+        </main>
+      </div>
+
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-subtle px-3 py-2 flex items-center justify-around z-30">
+        <button
+          onClick={() => setActiveTab('feed')}
+          className={`flex flex-col items-center p-1 text-[10px] font-bold ${
+            activeTab === 'feed' ? 'text-[#FF4F91]' : 'text-secondary'
+          }`}
+        >
+          <Home className="w-5 h-5" />
+          <span>Home</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('request')}
+          className={`flex flex-col items-center p-1 text-[10px] font-bold ${
+            activeTab === 'request' ? 'text-[#FF4F91]' : 'text-secondary'
+          }`}
+        >
+          <Music className="w-5 h-5" />
+          <span>Request</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('player')}
+          className={`flex flex-col items-center p-1 text-[10px] font-bold ${
+            activeTab === 'player' ? 'text-[#B6FF00] font-black' : 'text-secondary'
+          }`}
+        >
+          <div className="w-8 h-8 rounded-full bg-[#B6FF00] text-[#0B0B0B] flex items-center justify-center -mt-3 shadow-md border border-black">
+            <Headphones className="w-4 h-4" />
+          </div>
+          <span className="mt-0.5">Radio</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('queue')}
+          className={`flex flex-col items-center p-1 text-[10px] font-bold ${
+            activeTab === 'queue' ? 'text-[#FF4F91]' : 'text-secondary'
+          }`}
+        >
+          <ListMusic className="w-5 h-5" />
+          <span>Antrean</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('dj')}
+          className={`flex flex-col items-center p-1 text-[10px] font-bold ${
+            activeTab === 'dj' ? 'text-[#FF4F91]' : 'text-secondary'
+          }`}
+        >
+          <Settings className="w-5 h-5" />
+          <span>Setting</span>
+        </button>
+      </div>
+
+      {/* Persistent Mini Player across tabs */}
+      <MiniPlayer activeTab={activeTab} setActiveTab={setActiveTab} requests={requests} />
+
+      {/* Modals */}
+      <GoogleSheetModal
+        isOpen={isSheetModalOpen}
+        onClose={() => setIsSheetModalOpen(false)}
+        sheetConfig={sheetConfig}
+        onConnectSheet={handleConnectSheet}
+        onRefresh={handleManualRefresh}
+        requests={requests}
+      />
+
+      <ShareRequestLinkModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+      />
+
+      <AdminPinModal
+        isOpen={isAdminPinModalOpen}
+        onClose={() => setIsAdminPinModalOpen(false)}
+        onSuccessAdmin={handleAdminLoginSuccess}
+      />
+
+      <StoryShareModal
+        isOpen={!!storyModalRequest}
+        onClose={() => setStoryModalRequest(null)}
+        request={storyModalRequest}
+        radioHost={radioHosts[0]}
+        radioHosts={radioHosts}
+      />
+
+      {/* Adzan Settings Modal */}
+      <AdzanSettingsModal
+        isOpen={isAdzanModalOpen}
+        onClose={() => setIsAdzanModalOpen(false)}
+        scheduler={adzanScheduler}
+      />
+    </div>
   );
 }
