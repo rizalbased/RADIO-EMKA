@@ -87,6 +87,7 @@ export function useAdzanScheduler() {
     if (typeof window === 'undefined') return;
 
     const audio = new Audio();
+    audio.crossOrigin = 'anonymous';
     audio.preload = 'auto';
     audioRef.current = audio;
 
@@ -180,6 +181,7 @@ export function useAdzanScheduler() {
 
     if (audioRef.current) {
       const audio = audioRef.current;
+      audio.crossOrigin = 'anonymous';
       audio.src = audioUrl;
       audio.volume = audioVolume;
       audio.muted = isAudioMuted;

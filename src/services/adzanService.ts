@@ -28,14 +28,14 @@ export interface AdzanSettings {
   updated_at?: string;
 }
 
-// High-quality default Adzan audio streams with fallback mirrors
+// High-quality default Adzan audio streams from CORS-enabled CDN (jsDelivr / Wikimedia)
 export const DEFAULT_ADZAN_AUDIO: Record<PrayerKey, string> = {
-  // Subuh includes 'Ash-shalatu khairum minan-naum'
-  subuh: 'https://ia800204.us.archive.org/11/items/AdzanSubuh/AdzanSubuh.mp3',
-  dzuhur: 'https://ia800301.us.archive.org/15/items/AdzanMakkah/Adzan%20Makkah.mp3',
-  ashar: 'https://ia800301.us.archive.org/15/items/AdzanMakkah/Adzan%20Makkah.mp3',
-  maghrib: 'https://ia800301.us.archive.org/15/items/AdzanMakkah/Adzan%20Makkah.mp3',
-  isya: 'https://ia800301.us.archive.org/15/items/AdzanMakkah/Adzan%20Makkah.mp3'
+  // Subuh includes 'Ash-shalatu khairum minan-naum' (Mishary Rashid Alafasy)
+  subuh: 'https://cdn.jsdelivr.net/gh/mohsalvi/adhan-audio@main/fajr/mishary-alafasy-fajr-01.mp3',
+  dzuhur: 'https://cdn.jsdelivr.net/gh/mohsalvi/adhan-audio@main/general/makkah-haram-01.mp3',
+  ashar: 'https://cdn.jsdelivr.net/gh/mohsalvi/adhan-audio@main/general/madinah-01.mp3',
+  maghrib: 'https://cdn.jsdelivr.net/gh/mohsalvi/adhan-audio@main/general/al-aqsa-jerusalem-01.mp3',
+  isya: 'https://cdn.jsdelivr.net/gh/mohsalvi/adhan-audio@main/general/mishary-alafasy-01.mp3'
 };
 
 export const PRAYER_DISPLAY_NAMES: Record<PrayerKey, string> = {
@@ -223,8 +223,36 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
       .from('adzan-audio')
       .getPublicUrl(filePath);
 
+    const publicUrl = publicUrlData.publicUrl;
+
+    // Update public URL to adzan_settings table (audio_subuh, audio_dzuhur, dst.)
+    const audioColumn = `audio_${prayer}`;
+    try {
+      const { error: dbError } = await supabase
+        .from('adzan_settings')
+        .upsert({
+          id: 1,
+          [audioColumn]: publicUrl,
+          updated_at: new Date().toISOString()
+        });
+
+      if (dbError) {
+        console.warn(`[ADZAN DB] Warning saving ${audioColumn} to adzan_settings:`, dbError.message);
+      }
+    } catch (dbErr) {
+      console.warn(`[ADZAN DB] Exception saving ${audioColumn} to adzan_settings:`, dbErr);
+    }
+
+    // Update local cache
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
+      const current = cached ? JSON.parse(cached) : DEFAULT_SETTINGS;
+      current[audioColumn] = publicUrl;
+      localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(current));
+    } catch {}
+
     return {
-      url: publicUrlData.publicUrl,
+      url: publicUrl,
       isStoredRemotely: true
     };
   } catch (err: any) {

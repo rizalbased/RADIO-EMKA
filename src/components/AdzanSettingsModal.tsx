@@ -26,6 +26,7 @@ import {
   updateAdzanSettings,
   uploadAdzanAudioFile
 } from '../services/adzanService';
+import { getSupabaseClient } from '../lib/supabaseClient';
 import { useAdzanScheduler } from '../hooks/useAdzanScheduler';
 
 interface AdzanSettingsModalProps {
@@ -68,20 +69,25 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
   // Handle preview audio element
   useEffect(() => {
     const audio = new Audio();
+    audio.crossOrigin = 'anonymous';
+    audio.preload = 'auto';
     previewAudioRef.current = audio;
 
     audio.onended = () => {
       setPreviewingPrayer(null);
     };
 
-    audio.onerror = () => {
+    audio.onerror = (e) => {
+      console.warn('[PREVIEW AUDIO] Audio element error event:', e);
       setPreviewingPrayer(null);
-      setErrorMessage('Audio preview gagal diputar.');
+      setErrorMessage('Audio preview gagal diputar. Periksa URL atau koneksi internet.');
     };
 
     return () => {
-      audio.pause();
-      audio.src = '';
+      try {
+        audio.pause();
+        audio.src = '';
+      } catch {}
     };
   }, []);
 
@@ -94,25 +100,51 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
   };
 
   const handlePreviewAudio = (prayer: PrayerKey) => {
+    // If currently previewing this prayer, toggle stop
     if (previewingPrayer === prayer) {
       if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
+        try {
+          previewAudioRef.current.pause();
+          previewAudioRef.current.currentTime = 0;
+        } catch {}
       }
       setPreviewingPrayer(null);
       return;
     }
 
+    // Stop existing audio before switching
     if (previewAudioRef.current) {
-      const url = getPrayerAudioUrl(localSettings, prayer);
-      previewAudioRef.current.src = url;
-      previewAudioRef.current.play()
+      try {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.currentTime = 0;
+      } catch {}
+    }
+
+    const audio = previewAudioRef.current || new Audio();
+    previewAudioRef.current = audio;
+
+    // Requirement 2: Set crossOrigin = 'anonymous' on HTML Audio instance
+    audio.crossOrigin = 'anonymous';
+
+    const url = getPrayerAudioUrl(localSettings, prayer);
+    audio.src = url;
+
+    // Requirement 4: Add catch() on audio.play() for clean error handling without crashing
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise
         .then(() => {
           setPreviewingPrayer(prayer);
           setErrorMessage(null);
         })
-        .catch(err => {
-          console.warn('[PREVIEW AUDIO] Error playing:', err);
-          setErrorMessage('Gagal memutar audio preview.');
+        .catch((err: any) => {
+          console.warn('[PREVIEW AUDIO] Error playing audio:', err);
+          setPreviewingPrayer(null);
+          setErrorMessage(
+            `Gagal memutar audio preview ${PRAYER_DISPLAY_NAMES[prayer]}: ${
+              err?.message || 'Format audio tidak didukung atau pemutaran diblokir browser.'
+            }`
+          );
         });
     }
   };
@@ -125,9 +157,13 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
     setErrorMessage(null);
 
     try {
+      // Requirement 3: Upload MP3 to Supabase Storage bucket 'adzan-audio', get public URL, and update adzan_settings table
       const result = await uploadAdzanAudioFile(prayer, file);
       if (result.error) {
         console.warn('[ADZAN UPLOAD WARN]:', result.error);
+        setErrorMessage(result.error);
+      } else {
+        setErrorMessage(null);
       }
 
       setLocalSettings(prev => {
@@ -138,9 +174,8 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
         };
       });
 
-      if (!result.isStoredRemotely) {
-        setErrorMessage(result.error || 'Audio disimpan di browser (Bucket Supabase belum aktif).');
-      }
+      // Synchronize with background scheduler
+      await reloadSettings();
     } catch (err: any) {
       setErrorMessage(err?.message || 'Gagal mengunggah file.');
     } finally {
@@ -150,11 +185,15 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
     }
   };
 
-  const handleResetToDefault = (prayer: PrayerKey) => {
+  const handleResetToDefault = async (prayer: PrayerKey) => {
     if (previewingPrayer === prayer && previewAudioRef.current) {
-      previewAudioRef.current.pause();
+      try {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.currentTime = 0;
+      } catch {}
       setPreviewingPrayer(null);
     }
+
     setLocalSettings(prev => {
       if (!prev) return null;
       return {
@@ -162,6 +201,21 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
         [`audio_${prayer}`]: null
       };
     });
+
+    // Clear custom audio in Supabase
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        await supabase.from('adzan_settings').upsert({
+          id: 1,
+          [`audio_${prayer}`]: null,
+          updated_at: new Date().toISOString()
+        });
+        await reloadSettings();
+      } catch (err) {
+        console.warn('[ADZAN] Error resetting audio in Supabase:', err);
+      }
+    }
   };
 
   const handleSave = async () => {
@@ -214,14 +268,27 @@ ON CONFLICT (id) DO NOTHING;
 -- 3. Aktifkan Row Level Security (RLS)
 ALTER TABLE public.adzan_settings ENABLE ROW LEVEL SECURITY;
 
--- 4. Kebijakan Akses
+-- 4. Kebijakan Akses Database
 CREATE POLICY "Public Read Adzan Settings" 
 ON public.adzan_settings FOR SELECT 
 USING (true);
 
 CREATE POLICY "Admin Update Adzan Settings" 
 ON public.adzan_settings FOR UPDATE 
-USING (true);`;
+USING (true);
+
+-- 5. Bucket Storage 'adzan-audio' (Jalankan di SQL Editor jika belum dibuat manual di menu Storage)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('adzan-audio', 'adzan-audio', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+CREATE POLICY "Public Access Adzan Audio"
+ON storage.objects FOR SELECT
+USING (bucket_id = 'adzan-audio');
+
+CREATE POLICY "Allow Upload Adzan Audio"
+ON storage.objects FOR INSERT
+WITH CHECK (bucket_id = 'adzan-audio');`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(sqlCode);
