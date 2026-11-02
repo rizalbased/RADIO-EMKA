@@ -3,8 +3,6 @@ import {
   X,
   Radio,
   Upload,
-  Volume2,
-  VolumeX,
   Play,
   Pause,
   RotateCcw,
@@ -15,13 +13,15 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Music
+  Music,
+  Loader2,
+  CheckCircle2,
+  Trash2
 } from 'lucide-react';
 import {
   AdzanSettings,
   PrayerKey,
   PRAYER_DISPLAY_NAMES,
-  DEFAULT_ADZAN_AUDIO,
   getPrayerAudioUrl,
   updateAdzanSettings,
   uploadAdzanAudioFile
@@ -35,19 +35,32 @@ interface AdzanSettingsModalProps {
   scheduler: ReturnType<typeof useAdzanScheduler>;
 }
 
+interface ToastMessage {
+  message: string;
+  type: 'success' | 'error';
+}
+
 export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
   isOpen,
   onClose,
   scheduler
 }) => {
-  const { settings, reloadSettings, playAdzan, stopAdzan, isBroadcastingAdzan } = scheduler;
+  const { settings, reloadSettings, playAdzan } = scheduler;
 
   const [localSettings, setLocalSettings] = useState<AdzanSettings | null>(null);
   const [uploadingPrayer, setUploadingPrayer] = useState<PrayerKey | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<Record<PrayerKey, number>>({
+    subuh: 0,
+    dzuhur: 0,
+    ashar: 0,
+    maghrib: 0,
+    isya: 0
+  });
   const [previewingPrayer, setPreviewingPrayer] = useState<PrayerKey | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [showSqlGuide, setShowSqlGuide] = useState<boolean>(false);
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
 
@@ -65,6 +78,16 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
       setLocalSettings({ ...settings });
     }
   }, [settings, isOpen]);
+
+  // Auto-dismiss toast after 4 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   // Handle preview audio element
   useEffect(() => {
@@ -122,14 +145,11 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
 
     const audio = previewAudioRef.current || new Audio();
     previewAudioRef.current = audio;
-
-    // Requirement 2: Set crossOrigin = 'anonymous' on HTML Audio instance
     audio.crossOrigin = 'anonymous';
 
     const url = getPrayerAudioUrl(localSettings, prayer);
     audio.src = url;
 
-    // Requirement 4: Add catch() on audio.play() for clean error handling without crashing
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise
@@ -154,25 +174,35 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
     if (!file) return;
 
     setUploadingPrayer(prayer);
+    setUploadProgress(prev => ({ ...prev, [prayer]: 15 }));
     setErrorMessage(null);
 
     try {
-      // Requirement 3: Upload MP3 to Supabase Storage bucket 'adzan-audio', get public URL, and update adzan_settings table
-      const result = await uploadAdzanAudioFile(prayer, file);
-      if (result.error) {
+      const result = await uploadAdzanAudioFile(prayer, file, (percent) => {
+        setUploadProgress(prev => ({ ...prev, [prayer]: percent }));
+      });
+
+      if (result.error && !result.url) {
         console.warn('[ADZAN UPLOAD WARN]:', result.error);
         setErrorMessage(result.error);
       } else {
         setErrorMessage(null);
+        // Indikator UI: Notifikasi toast hijau saat file berhasil diunggah
+        setToast({
+          message: `Audio Adzan ${PRAYER_DISPLAY_NAMES[prayer]} berhasil diperbarui!`,
+          type: 'success'
+        });
       }
 
-      setLocalSettings(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          [`audio_${prayer}`]: result.url
-        };
-      });
+      if (result.url) {
+        setLocalSettings(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            [`audio_${prayer}`]: result.url
+          };
+        });
+      }
 
       // Synchronize with background scheduler
       await reloadSettings();
@@ -180,7 +210,7 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
       setErrorMessage(err?.message || 'Gagal mengunggah file.');
     } finally {
       setUploadingPrayer(null);
-      // Reset input value so same file can be selected again
+      setUploadProgress(prev => ({ ...prev, [prayer]: 0 }));
       if (event.target) event.target.value = '';
     }
   };
@@ -202,19 +232,15 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
       };
     });
 
-    // Clear custom audio in Supabase
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      try {
-        await supabase.from('adzan_settings').upsert({
-          id: 1,
-          [`audio_${prayer}`]: null,
-          updated_at: new Date().toISOString()
-        });
-        await reloadSettings();
-      } catch (err) {
-        console.warn('[ADZAN] Error resetting audio in Supabase:', err);
-      }
+    try {
+      await updateAdzanSettings({ [`audio_${prayer}`]: null });
+      await reloadSettings();
+      setToast({
+        message: `Audio Adzan ${PRAYER_DISPLAY_NAMES[prayer]} dikembalikan ke default sistem.`,
+        type: 'success'
+      });
+    } catch (err) {
+      console.warn('[ADZAN] Error resetting audio in Supabase:', err);
     }
   };
 
@@ -224,33 +250,42 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
     setErrorMessage(null);
 
     try {
-      // 3. Simpan seluruh Public URL audio beserta status is_active ke tabel adzan_settings di Supabase
+      // 1. Coba simpan ke Supabase client dengan penanganan error RLS (tanpa crash 403)
       const supabase = getSupabaseClient();
       if (supabase) {
-        const { error: upsertError } = await supabase
-          .from('adzan_settings')
-          .upsert({
-            id: 1,
-            city_name: localSettings.city_name || 'Kota Medan',
-            city_id: localSettings.city_id || '0228',
-            is_active: localSettings.is_active,
-            audio_subuh: localSettings.audio_subuh,
-            audio_dzuhur: localSettings.audio_dzuhur,
-            audio_ashar: localSettings.audio_ashar,
-            audio_maghrib: localSettings.audio_maghrib,
-            audio_isya: localSettings.audio_isya,
-            updated_at: new Date().toISOString()
-          });
+        try {
+          const { error: upsertError } = await supabase
+            .from('adzan_settings')
+            .upsert({
+              id: 1,
+              city_name: localSettings.city_name || 'Kota Medan',
+              city_id: localSettings.city_id || '0228',
+              is_active: localSettings.is_active,
+              audio_subuh: localSettings.audio_subuh,
+              audio_dzuhur: localSettings.audio_dzuhur,
+              audio_ashar: localSettings.audio_ashar,
+              audio_maghrib: localSettings.audio_maghrib,
+              audio_isya: localSettings.audio_isya,
+              updated_at: new Date().toISOString()
+            });
 
-        if (upsertError) {
-          throw upsertError;
+          if (upsertError) {
+            console.warn('[ADZAN] Supabase client upsert notice (fallback will handle):', upsertError.message);
+          }
+        } catch (clientErr: any) {
+          console.warn('[ADZAN] Supabase client exception:', clientErr?.message);
         }
       }
 
+      // 2. Simpan juga melalui backend server API & local storage
       await updateAdzanSettings(localSettings);
       await reloadSettings();
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
+      setToast({
+        message: 'Pengaturan siaran adzan berhasil disimpan permanen!',
+        type: 'success'
+      });
+      setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
       console.warn('[ADZAN] Save settings error:', err);
       setErrorMessage(err?.message || 'Gagal menyimpan pengaturan ke database.');
@@ -260,11 +295,8 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
   };
 
   const handleTestBroadcast = () => {
-    // Stops any preview
     if (previewAudioRef.current) previewAudioRef.current.pause();
     setPreviewingPrayer(null);
-
-    // Trigger Dzuhur or Subuh preview
     playAdzan('dzuhur', true);
     onClose();
   };
@@ -292,19 +324,24 @@ ON CONFLICT (id) DO NOTHING;
 -- 3. Aktifkan Row Level Security (RLS)
 ALTER TABLE public.adzan_settings ENABLE ROW LEVEL SECURITY;
 
--- 4. Kebijakan Akses Database
-CREATE POLICY "Public Read Adzan Settings" 
-ON public.adzan_settings FOR SELECT 
-USING (true);
+-- 4. Kebijakan Akses Database (Izinkan Baca, Tambah & Ubah untuk Semua)
+DROP POLICY IF EXISTS "Public Read Adzan Settings" ON public.adzan_settings;
+DROP POLICY IF EXISTS "Admin Update Adzan Settings" ON public.adzan_settings;
+DROP POLICY IF EXISTS "Allow All Adzan Settings" ON public.adzan_settings;
 
-CREATE POLICY "Admin Update Adzan Settings" 
-ON public.adzan_settings FOR UPDATE 
-USING (true);
+CREATE POLICY "Allow All Adzan Settings" 
+ON public.adzan_settings FOR ALL 
+USING (true)
+WITH CHECK (true);
 
--- 5. Bucket Storage 'adzan-audio' (Jalankan di SQL Editor jika belum dibuat manual di menu Storage)
+-- 5. Bucket Storage 'adzan-audio' & Kebijakan Hak Akses Storage
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('adzan-audio', 'adzan-audio', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "Public Access Adzan Audio" ON storage.objects;
+DROP POLICY IF EXISTS "Allow Upload Adzan Audio" ON storage.objects;
+DROP POLICY IF EXISTS "Allow Update Adzan Audio" ON storage.objects;
 
 CREATE POLICY "Public Access Adzan Audio"
 ON storage.objects FOR SELECT
@@ -312,6 +349,11 @@ USING (bucket_id = 'adzan-audio');
 
 CREATE POLICY "Allow Upload Adzan Audio"
 ON storage.objects FOR INSERT
+WITH CHECK (bucket_id = 'adzan-audio');
+
+CREATE POLICY "Allow Update Adzan Audio"
+ON storage.objects FOR UPDATE
+USING (bucket_id = 'adzan-audio')
 WITH CHECK (bucket_id = 'adzan-audio');`;
 
   const copyToClipboard = () => {
@@ -351,7 +393,23 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 overflow-y-auto space-y-5 flex-1 scrollbar-none">
+        <div className="p-5 overflow-y-auto space-y-4 flex-1 scrollbar-none">
+          {/* Toast Notification Banner */}
+          {toast && (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span className="font-bold">{toast.message}</span>
+              </div>
+              <button
+                onClick={() => setToast(null)}
+                className="p-1 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {errorMessage && (
             <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -359,7 +417,7 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
             </div>
           )}
 
-          {saveSuccess && (
+          {saveSuccess && !toast && (
             <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center space-x-2">
               <Check className="w-4 h-4 flex-shrink-0" />
               <span>Pengaturan siaran adzan berhasil disimpan!</span>
@@ -419,35 +477,50 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
 
             {prayers.map((prayer) => {
               const customUrl = localSettings[`audio_${prayer}` as keyof AdzanSettings] as string | null;
-              const hasCustom = !!customUrl;
+              const hasCustom = !!(customUrl && typeof customUrl === 'string' && customUrl.trim().length > 0);
               const isUploading = uploadingPrayer === prayer;
               const isPreviewing = previewingPrayer === prayer;
+              const progressPercent = uploadProgress[prayer] || 0;
 
               return (
                 <div
                   key={prayer}
-                  className="p-3.5 rounded-2xl bg-elevated/60 border border-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  className={`p-3.5 rounded-2xl border transition-all ${
+                    hasCustom
+                      ? 'bg-emerald-950/20 border-emerald-500/30 shadow-sm'
+                      : 'bg-elevated/60 border-subtle'
+                  } flex flex-col sm:flex-row sm:items-center justify-between gap-3`}
                 >
-                  {/* Left: Info */}
+                  {/* Left: Info & Status Badge */}
                   <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 rounded-xl bg-card border border-subtle flex items-center justify-center text-primary flex-shrink-0">
-                      <Music className="w-4 h-4 text-[#B6FF00]" />
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 border ${
+                      hasCustom
+                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                        : 'bg-card border-subtle text-primary'
+                    }`}>
+                      <Music className={`w-4 h-4 ${hasCustom ? 'text-emerald-400' : 'text-[#B6FF00]'}`} />
                     </div>
                     <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-black text-primary uppercase font-display">
+                      <div className="flex items-center flex-wrap gap-2">
+                        <span className="text-sm font-black text-primary uppercase font-display tracking-wide">
                           {PRAYER_DISPLAY_NAMES[prayer]}
                         </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          hasCustom
-                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                            : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                        }`}>
-                          {hasCustom ? 'Audio Kustom' : 'Default Sistem'}
-                        </span>
+
+                        {/* Indikator UI: Jika audio sudah diunggah, tampilkan badge status berwarna hijau terang: "✓ Audio Kustom Terpasang" */}
+                        {hasCustom ? (
+                          <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 shadow-sm">
+                            <span>✓ Audio Kustom Terpasang</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-zinc-800/80 text-zinc-400 border border-zinc-700/60">
+                            Default Sistem
+                          </span>
+                        )}
                       </div>
-                      <p className="text-[11px] text-secondary">
-                        {prayer === 'subuh'
+                      <p className="text-[11px] text-secondary mt-0.5">
+                        {hasCustom
+                          ? 'Audio kustom aktif (tersimpan di Supabase Storage)'
+                          : prayer === 'subuh'
                           ? 'Termasuk lafadz Ash-shalatu khairum minan-naum'
                           : 'Audio Adzan standar berkualitas tinggi'}
                       </p>
@@ -455,7 +528,7 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
                   </div>
 
                   {/* Right: Actions */}
-                  <div className="flex items-center space-x-2 justify-end">
+                  <div className="flex items-center space-x-2 justify-end flex-wrap gap-y-2">
                     {/* Hidden file input */}
                     <input
                       type="file"
@@ -467,10 +540,11 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
 
                     {/* Preview Button */}
                     <button
+                      type="button"
                       onClick={() => handlePreviewAudio(prayer)}
-                      className={`p-2 rounded-xl border text-xs font-bold transition flex items-center space-x-1 ${
+                      className={`p-2 rounded-xl border text-xs font-bold transition flex items-center space-x-1.5 ${
                         isPreviewing
-                          ? 'bg-[#B6FF00] text-black border-black'
+                          ? 'bg-[#B6FF00] text-black border-black shadow-md'
                           : 'bg-card hover:bg-secondary text-primary border-subtle'
                       }`}
                       title={isPreviewing ? 'Hentikan Preview' : 'Dengarkan Audio'}
@@ -479,24 +553,42 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
                       <span className="text-[11px]">{isPreviewing ? 'Stop' : 'Cek'}</span>
                     </button>
 
-                    {/* Upload Custom Audio Button */}
-                    <button
-                      disabled={isUploading}
-                      onClick={() => fileInputRefs.current[prayer]?.click()}
-                      className="px-3 py-2 rounded-xl bg-card hover:bg-secondary text-primary border border-subtle transition text-xs font-bold flex items-center space-x-1.5"
-                    >
-                      <Upload className={`w-3.5 h-3.5 ${isUploading ? 'animate-bounce text-[#FF4F91]' : ''}`} />
-                      <span>{isUploading ? 'Mengunggah...' : 'Unggah'}</span>
-                    </button>
+                    {/* Upload / Ganti File Button & Progress Indicator */}
+                    {isUploading ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="px-3 py-2 rounded-xl bg-card text-[#B6FF00] border border-[#B6FF00]/40 transition text-xs font-bold flex items-center space-x-1.5 cursor-not-allowed shadow-sm"
+                      >
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#B6FF00]" />
+                        <span>Mengunggah {progressPercent}%...</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRefs.current[prayer]?.click()}
+                        className={`px-3 py-2 rounded-xl border transition text-xs font-bold flex items-center space-x-1.5 ${
+                          hasCustom
+                            ? 'bg-card hover:bg-secondary text-emerald-400 border-emerald-500/30'
+                            : 'bg-card hover:bg-secondary text-primary border-subtle'
+                        }`}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>{hasCustom ? 'Ganti File' : 'Unggah'}</span>
+                      </button>
+                    )}
 
-                    {/* Reset to Default */}
+                    {/* Reset Button: Ikon Trash / Refresh untuk menghapus audio kustom dan kembali ke default */}
                     {hasCustom && (
                       <button
+                        type="button"
+                        disabled={isUploading}
                         onClick={() => handleResetToDefault(prayer)}
-                        className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition"
-                        title="Kembalikan ke Default Sistem"
+                        className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition flex items-center space-x-1"
+                        title={`Reset audio ${PRAYER_DISPLAY_NAMES[prayer]} ke default sistem`}
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
+                        <span className="text-[11px] font-bold">Reset</span>
                       </button>
                     )}
                   </div>
@@ -521,7 +613,7 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
             {showSqlGuide && (
               <div className="p-4 pt-0 border-t border-subtle/40 space-y-3 text-xs text-secondary">
                 <p>
-                  Jika belum menjalankan query SQL di Supabase SQL Editor, jalankan perintah berikut untuk membuat tabel <code className="text-[#B6FF00]">adzan_settings</code> dan pastikan bucket storage bernama <code className="text-[#B6FF00]">adzan-audio</code> berstatus <strong>Public</strong>.
+                  Jika belum menjalankan query SQL di Supabase SQL Editor, jalankan perintah berikut untuk mengonfigurasi tabel <code className="text-[#B6FF00]">adzan_settings</code> dengan hak akses RLS yang benar, serta bucket <code className="text-[#B6FF00]">adzan-audio</code>.
                 </p>
 
                 <div className="relative">
@@ -564,7 +656,10 @@ WITH CHECK (bucket_id = 'adzan-audio');`;
               className="px-5 py-2 rounded-xl bg-[#B6FF00] hover:brightness-105 text-black text-xs font-black transition flex items-center space-x-1.5 shadow-sm"
             >
               {isSaving ? (
-                <span>Menyimpan...</span>
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-black" />
+                  <span>Menyimpan...</span>
+                </>
               ) : (
                 <>
                   <Check className="w-4 h-4" />

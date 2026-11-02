@@ -58,6 +58,51 @@ const CONFIG_FILE = path.join(DATA_DIR, 'sheet_config.json');
 const DELETED_IDS_FILE = path.join(DATA_DIR, 'deleted_ids.json');
 const RADIO_HOST_FILE = path.join(DATA_DIR, 'radio_host.json');
 const LIVE_STATE_FILE = path.join(DATA_DIR, 'live_radio_state.json');
+const ADZAN_SETTINGS_FILE = path.join(DATA_DIR, 'adzan_settings.json');
+
+interface AdzanSettingsData {
+  id: number;
+  city_name: string;
+  city_id: string;
+  is_active: boolean;
+  audio_subuh: string | null;
+  audio_dzuhur: string | null;
+  audio_ashar: string | null;
+  audio_maghrib: string | null;
+  audio_isya: string | null;
+  updated_at?: string;
+}
+
+const DEFAULT_SERVER_ADZAN_SETTINGS: AdzanSettingsData = {
+  id: 1,
+  city_name: 'Kota Medan',
+  city_id: '0228',
+  is_active: true,
+  audio_subuh: null,
+  audio_dzuhur: null,
+  audio_ashar: null,
+  audio_maghrib: null,
+  audio_isya: null
+};
+
+function loadServerAdzanSettings(): AdzanSettingsData {
+  if (fs.existsSync(ADZAN_SETTINGS_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(ADZAN_SETTINGS_FILE, 'utf-8'));
+    } catch {
+      return DEFAULT_SERVER_ADZAN_SETTINGS;
+    }
+  }
+  return DEFAULT_SERVER_ADZAN_SETTINGS;
+}
+
+function saveServerAdzanSettings(data: AdzanSettingsData) {
+  try {
+    fs.writeFileSync(ADZAN_SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err: any) {
+    console.log('Error saving adzan settings:', err.message);
+  }
+}
 
 interface LiveRadioState {
   videoId: string;
@@ -952,6 +997,82 @@ app.post('/api/radio-host', (req, res) => {
   res.json({ success: true, hosts: newHosts, host: updated });
 });
 
+// 6e. Adzan Settings endpoints (handles Supabase DB sync + server fallback to prevent 403 RLS errors)
+app.get('/api/adzan-settings', async (req, res) => {
+  let settings = loadServerAdzanSettings();
+
+  if (serverSupabase) {
+    try {
+      const { data, error } = await serverSupabase
+        .from('adzan_settings')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (!error && data) {
+        settings = {
+          ...settings,
+          ...data,
+          id: 1,
+          is_active: data.is_active ?? settings.is_active
+        };
+        saveServerAdzanSettings(settings);
+      }
+    } catch (err: any) {
+      console.warn('[SERVER ADZAN] Supabase fetch notice:', err.message);
+    }
+  }
+
+  res.json({ success: true, settings });
+});
+
+app.post('/api/adzan-settings', async (req, res) => {
+  const current = loadServerAdzanSettings();
+  const updates = req.body || {};
+
+  const merged: AdzanSettingsData = {
+    ...current,
+    ...updates,
+    id: 1,
+    updated_at: new Date().toISOString()
+  };
+
+  saveServerAdzanSettings(merged);
+
+  let supabaseSuccess = false;
+  if (serverSupabase) {
+    try {
+      const { error } = await serverSupabase
+        .from('adzan_settings')
+        .upsert({
+          id: 1,
+          city_name: merged.city_name || 'Kota Medan',
+          city_id: merged.city_id || '0228',
+          is_active: merged.is_active,
+          audio_subuh: merged.audio_subuh,
+          audio_dzuhur: merged.audio_dzuhur,
+          audio_ashar: merged.audio_ashar,
+          audio_maghrib: merged.audio_maghrib,
+          audio_isya: merged.audio_isya,
+          updated_at: merged.updated_at
+        });
+
+      if (!error) {
+        supabaseSuccess = true;
+      } else {
+        console.warn('[SERVER ADZAN] Server Supabase upsert notice:', error.message);
+      }
+    } catch (err: any) {
+      console.warn('[SERVER ADZAN] Supabase upsert exception:', err?.message);
+    }
+  }
+
+  res.json({
+    success: true,
+    settings: merged,
+    supabaseSynced: supabaseSuccess
+  });
+});
 
 // 7. Song Search Proxy (via iTunes Public API for artwork & 30s preview)
 app.get('/api/song-search', async (req, res) => {

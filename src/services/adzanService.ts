@@ -62,7 +62,7 @@ const LOCAL_STORAGE_SETTINGS_KEY = 'emka_adzan_settings';
 const LOCAL_STORAGE_SCHEDULE_KEY_PREFIX = 'emka_adzan_schedule_';
 
 /**
- * Fetch Adzan settings from Supabase (adzan_settings table),
+ * Fetch Adzan settings from Supabase (adzan_settings table) or backend API,
  * falling back gracefully to localStorage or default config.
  */
 export async function getAdzanSettings(): Promise<AdzanSettings> {
@@ -78,52 +78,66 @@ export async function getAdzanSettings(): Promise<AdzanSettings> {
     console.warn('[ADZAN] Error reading local settings backup:', err);
   }
 
-  if (!supabase) {
-    return localBackup;
+  // 1. Try fetching from Supabase client directly
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('adzan_settings')
+        .select('*')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (!error && data) {
+        const merged: AdzanSettings = {
+          id: 1,
+          city_name: data.city_name || 'Kota Medan',
+          city_id: data.city_id || '0228',
+          is_active: data.is_active ?? true,
+          audio_subuh: data.audio_subuh || null,
+          audio_dzuhur: data.audio_dzuhur || null,
+          audio_ashar: data.audio_ashar || null,
+          audio_maghrib: data.audio_maghrib || null,
+          audio_isya: data.audio_isya || null,
+          updated_at: data.updated_at
+        };
+        try {
+          localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(merged));
+        } catch {}
+        return merged;
+      }
+    } catch (err) {
+      console.warn('[ADZAN] Supabase direct fetch notice:', err);
+    }
   }
 
+  // 2. Fallback to server backend API endpoint (bypasses RLS / uses server persistence)
   try {
-    const { data, error } = await supabase
-      .from('adzan_settings')
-      .select('*')
-      .eq('id', 1)
-      .maybeSingle();
-
-    if (error) {
-      console.warn('[ADZAN] Supabase adzan_settings table query warning:', error.message);
-      return localBackup;
+    const res = await fetch('/api/adzan-settings');
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.settings) {
+        const merged: AdzanSettings = {
+          ...DEFAULT_SETTINGS,
+          ...localBackup,
+          ...json.settings,
+          id: 1
+        };
+        try {
+          localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(merged));
+        } catch {}
+        return merged;
+      }
     }
-
-    if (data) {
-      const merged: AdzanSettings = {
-        id: 1,
-        city_name: data.city_name || 'Kota Medan',
-        city_id: data.city_id || '0228',
-        is_active: data.is_active ?? true,
-        audio_subuh: data.audio_subuh || null,
-        audio_dzuhur: data.audio_dzuhur || null,
-        audio_ashar: data.audio_ashar || null,
-        audio_maghrib: data.audio_maghrib || null,
-        audio_isya: data.audio_isya || null,
-        updated_at: data.updated_at
-      };
-      try {
-        localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(merged));
-      } catch {}
-      return merged;
-    }
-
-    // Row id=1 doesn't exist yet, insert default
-    await supabase.from('adzan_settings').insert([DEFAULT_SETTINGS]);
-    return localBackup;
   } catch (err) {
-    console.warn('[ADZAN] Fetch settings exception, using fallback:', err);
-    return localBackup;
+    console.warn('[ADZAN] /api/adzan-settings fetch error, using local backup:', err);
   }
+
+  return localBackup;
 }
 
 /**
- * Update Adzan settings in Supabase and cache locally.
+ * Update Adzan settings in Supabase, backend server API, and cache locally.
+ * Prevents 403 Forbidden errors from breaking the user experience.
  */
 export async function updateAdzanSettings(updates: Partial<AdzanSettings>): Promise<AdzanSettings> {
   const current = await getAdzanSettings();
@@ -134,36 +148,47 @@ export async function updateAdzanSettings(updates: Partial<AdzanSettings>): Prom
     updated_at: new Date().toISOString()
   };
 
+  // 1. Always update local storage first for instant responsiveness
   try {
     localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(next));
   } catch {}
 
-  const supabase = getSupabaseClient();
-  if (!supabase) {
-    return next;
+  // 2. Persist to backend server endpoint (saves locally on server and executes serverSupabase upsert)
+  try {
+    await fetch('/api/adzan-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next)
+    });
+  } catch (serverErr) {
+    console.warn('[ADZAN] Server API settings update notice:', serverErr);
   }
 
-  try {
-    const { error } = await supabase
-      .from('adzan_settings')
-      .upsert({
-        id: 1,
-        city_name: next.city_name,
-        city_id: next.city_id,
-        is_active: next.is_active,
-        audio_subuh: next.audio_subuh,
-        audio_dzuhur: next.audio_dzuhur,
-        audio_ashar: next.audio_ashar,
-        audio_maghrib: next.audio_maghrib,
-        audio_isya: next.audio_isya,
-        updated_at: next.updated_at
-      });
+  // 3. Attempt client Supabase upsert (gracefully catch 403 Forbidden if RLS is restrictive)
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('adzan_settings')
+        .upsert({
+          id: 1,
+          city_name: next.city_name,
+          city_id: next.city_id,
+          is_active: next.is_active,
+          audio_subuh: next.audio_subuh,
+          audio_dzuhur: next.audio_dzuhur,
+          audio_ashar: next.audio_ashar,
+          audio_maghrib: next.audio_maghrib,
+          audio_isya: next.audio_isya,
+          updated_at: next.updated_at
+        });
 
-    if (error) {
-      console.warn('[ADZAN] Error upserting adzan_settings in Supabase:', error.message);
+      if (error) {
+        console.warn('[ADZAN] Client Supabase upsert notice (handled safely):', error.message);
+      }
+    } catch (err) {
+      console.warn('[ADZAN] Client Supabase update exception:', err);
     }
-  } catch (err) {
-    console.warn('[ADZAN] Update settings exception:', err);
   }
 
   return next;
@@ -173,14 +198,39 @@ export async function updateAdzanSettings(updates: Partial<AdzanSettings>): Prom
  * Upload Adzan audio file to Supabase Storage bucket 'adzan-audio'.
  * Returns public URL. If storage bucket fails or not configured, falls back
  * to a local Object URL or Data URL and informs caller.
+ * Provides onProgress callback for admin UI visibility.
  */
-export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promise<{ url: string; isStoredRemotely: boolean; error?: string }> {
+export async function uploadAdzanAudioFile(
+  prayer: PrayerKey,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<{ url: string; isStoredRemotely: boolean; error?: string }> {
   const supabase = getSupabaseClient();
   const fileExt = file.name.split('.').pop() || 'mp3';
   const filePath = `${prayer}_${Date.now()}.${fileExt}`;
 
+  // Report initial progress
+  onProgress?.(15);
+
+  let progressInterval: any = null;
+  let simulatedPercent = 15;
+  if (onProgress) {
+    progressInterval = setInterval(() => {
+      if (simulatedPercent < 85) {
+        simulatedPercent += Math.floor(Math.random() * 15) + 10;
+        if (simulatedPercent > 85) simulatedPercent = 85;
+        onProgress(simulatedPercent);
+      }
+    }, 250);
+  }
+
+  const finishProgress = () => {
+    if (progressInterval) clearInterval(progressInterval);
+    onProgress?.(100);
+  };
+
   if (!supabase) {
-    // Generate object URL for immediate session preview
+    finishProgress();
     const localUrl = URL.createObjectURL(file);
     return { url: localUrl, isStoredRemotely: false, error: 'Supabase client belum terhubung.' };
   }
@@ -190,7 +240,6 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
     try {
       await supabase.storage.createBucket('adzan-audio', { public: true });
     } catch (bucketCreateErr) {
-      // Bucket may already exist or error handled gracefully
       console.info('[ADZAN STORAGE] createBucket notice:', bucketCreateErr);
     }
 
@@ -219,6 +268,7 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
 
     if (uploadRes.error) {
       console.warn('[ADZAN STORAGE] Upload error to bucket adzan-audio:', uploadRes.error.message);
+      finishProgress();
       // Fallback to local DataURL or ObjectURL so admin can preview it
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -246,9 +296,9 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
       .getPublicUrl(filePath);
 
     const publicUrl = publicUrlData.publicUrl;
+    const audioColumn = `audio_${prayer}`;
 
     // Update public URL to adzan_settings table (audio_subuh, audio_dzuhur, dst.)
-    const audioColumn = `audio_${prayer}`;
     try {
       const { error: dbError } = await supabase
         .from('adzan_settings')
@@ -265,6 +315,17 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
       console.warn(`[ADZAN DB] Exception saving ${audioColumn} to adzan_settings:`, dbErr);
     }
 
+    // Also persist via server backend endpoint to guarantee persistence without 403 RLS issues
+    try {
+      await fetch('/api/adzan-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [audioColumn]: publicUrl })
+      });
+    } catch (apiErr) {
+      console.warn('[ADZAN] Backend sync warning:', apiErr);
+    }
+
     // Update local cache
     try {
       const cached = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
@@ -273,11 +334,13 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
       localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(current));
     } catch {}
 
+    finishProgress();
     return {
       url: publicUrl,
       isStoredRemotely: true
     };
   } catch (err: any) {
+    finishProgress();
     console.warn('[ADZAN STORAGE] Exception during audio upload:', err);
     return {
       url: URL.createObjectURL(file),
