@@ -224,12 +224,36 @@ export const AdzanSettingsModal: React.FC<AdzanSettingsModalProps> = ({
     setErrorMessage(null);
 
     try {
+      // 3. Simpan seluruh Public URL audio beserta status is_active ke tabel adzan_settings di Supabase
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        const { error: upsertError } = await supabase
+          .from('adzan_settings')
+          .upsert({
+            id: 1,
+            city_name: localSettings.city_name || 'Kota Medan',
+            city_id: localSettings.city_id || '0228',
+            is_active: localSettings.is_active,
+            audio_subuh: localSettings.audio_subuh,
+            audio_dzuhur: localSettings.audio_dzuhur,
+            audio_ashar: localSettings.audio_ashar,
+            audio_maghrib: localSettings.audio_maghrib,
+            audio_isya: localSettings.audio_isya,
+            updated_at: new Date().toISOString()
+          });
+
+        if (upsertError) {
+          throw upsertError;
+        }
+      }
+
       await updateAdzanSettings(localSettings);
       await reloadSettings();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Gagal menyimpan pengaturan.');
+      console.warn('[ADZAN] Save settings error:', err);
+      setErrorMessage(err?.message || 'Gagal menyimpan pengaturan ke database.');
     } finally {
       setIsSaving(false);
     }

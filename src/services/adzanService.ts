@@ -186,8 +186,16 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
   }
 
   try {
+    // 1. Sebelum mengunggah file, lakukan pembuatan bucket otomatis via client jika belum ada:
+    try {
+      await supabase.storage.createBucket('adzan-audio', { public: true });
+    } catch (bucketCreateErr) {
+      // Bucket may already exist or error handled gracefully
+      console.info('[ADZAN STORAGE] createBucket notice:', bucketCreateErr);
+    }
+
     // Upload to bucket 'adzan-audio'
-    const { error: uploadError } = await supabase.storage
+    let uploadRes = await supabase.storage
       .from('adzan-audio')
       .upload(filePath, file, {
         cacheControl: '3600',
@@ -195,30 +203,44 @@ export async function uploadAdzanAudioFile(prayer: PrayerKey, file: File): Promi
         contentType: file.type || 'audio/mpeg'
       });
 
-    if (uploadError) {
-      console.warn('[ADZAN STORAGE] Upload error to bucket adzan-audio:', uploadError.message);
-      // Fallback to local DataURL or ObjectURL so admin can still use it immediately
+    // Jika terjadi error "Bucket not found", buat bucket sekali lagi dan ulangi upload
+    if (uploadRes.error && uploadRes.error.message?.toLowerCase().includes('not found')) {
+      try {
+        await supabase.storage.createBucket('adzan-audio', { public: true });
+        uploadRes = await supabase.storage
+          .from('adzan-audio')
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: true,
+            contentType: file.type || 'audio/mpeg'
+          });
+      } catch {}
+    }
+
+    if (uploadRes.error) {
+      console.warn('[ADZAN STORAGE] Upload error to bucket adzan-audio:', uploadRes.error.message);
+      // Fallback to local DataURL or ObjectURL so admin can preview it
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => {
           resolve({
             url: reader.result as string,
             isStoredRemotely: false,
-            error: `Bucket 'adzan-audio' belum dibuat di Supabase Storage (${uploadError.message}). Audio disimpan sementara di browser.`
+            error: uploadRes.error?.message
           });
         };
         reader.onerror = () => {
           resolve({
             url: URL.createObjectURL(file),
             isStoredRemotely: false,
-            error: uploadError.message
+            error: uploadRes.error?.message
           });
         };
         reader.readAsDataURL(file);
       });
     }
 
-    // Get public URL
+    // 2. Setelah file berhasil diunggah ke bucket 'adzan-audio', ambil Public URL file tersebut
     const { data: publicUrlData } = supabase.storage
       .from('adzan-audio')
       .getPublicUrl(filePath);
